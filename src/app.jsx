@@ -53,7 +53,7 @@ function App() {
   const [finance, setFinance] = useState({});
   const [me, setMe] = useState("");
   const [status, setStatus] = useState("");
-  const [sync, setSync] = useState({ url: "", online: true, error: "" });
+  const [sync, setSync] = useState({ online: true, error: "" });
   const [busy, setBusy] = useState(false);
   const [demo, setDemo] = useState(false);
 
@@ -111,8 +111,6 @@ function App() {
 
   useEffect(() => {
     S.onStatus = (ok, err) => setSync((p) => ({ ...p, online: ok, error: ok ? "" : err || "" }));
-    const url = S.loadUrl();
-    setSync({ url, online: true, error: "" });
     loadAll();
 
     const onError = (e) => S.log("error", { message: e.message, source: e.filename, line: e.lineno });
@@ -125,35 +123,13 @@ function App() {
     };
   }, []);
 
-  const connectSync = async (url) => {
-    const trimmed = (url || "").trim();
-    if (!trimmed) {
-      S.setUrl("");
-      setSync({ url: "", online: true, error: "" });
-      flash("Sync turned off, this browser only");
-      return { ok: true };
-    }
-    try {
-      await S.ping(trimmed);
-    } catch (e) {
-      setSync((p) => ({ ...p, error: e.message }));
-      return { ok: false, error: e.message };
-    }
-    S.setUrl(trimmed);
-    setSync({ url: trimmed, online: true, error: "" });
-    await loadAll();
-    flash("Connected, everyone on this endpoint shares one book");
-    return { ok: true };
-  };
-
   const pushLocalToSync = async () => {
-    if (S.mode !== "remote") return;
     setBusy(true);
     await S.set(CONFIG_KEY, cfg);
     for (const [ym, rows] of Object.entries(entries)) await S.set(entriesKey(ym), rows);
     for (const [ym, rows] of Object.entries(finance)) await S.set(financeKey(ym), rows);
     setBusy(false);
-    flash("This browser's data was pushed to the shared book");
+    flash("This browser's data was pushed to shared storage");
   };
 
   const saveCfg = async (next) => {
@@ -167,7 +143,7 @@ function App() {
      holds for other people and replaces only this person's lines for the month. */
   const saveMonth = async (ym, rows) => {
     let merged = rows;
-    if (S.mode === "remote" && me) {
+    if (me) {
       const remote = await S.get(entriesKey(ym));
       if (Array.isArray(remote)) merged = [...remote.filter((e) => e.emp !== me), ...rows.filter((e) => e.emp === me)];
     }
@@ -280,13 +256,13 @@ function App() {
                 onClick={loadAll}
                 className="text-xs px-2 py-1 border"
                 style={{
-                  borderColor: sync.url && !sync.online ? BRAND.amber : "#3A4560",
-                  color: sync.url && !sync.online ? BRAND.amber : "#9AA6BF",
+                  borderColor: sync.online ? "#3A4560" : BRAND.amber,
+                  color: sync.online ? "#9AA6BF" : BRAND.amber,
                   background: "transparent",
                 }}
-                title={sync.url ? sync.error || "Shared book, click to refresh" : "This browser only, set up sync under Setup"}
+                title={sync.online ? "Shared with your team, click to refresh" : sync.error || "Shared storage unreachable"}
               >
-                {busy ? "Working" : !sync.url ? "This browser only" : sync.online ? "Shared, refresh" : "Sync offline"}
+                {busy ? "Working" : sync.online ? "Shared, refresh" : "Shared storage offline"}
               </button>
             )}
             <div className="text-right">
@@ -370,8 +346,8 @@ function App() {
             finance={finance}
             allEntries={allEntries}
             sync={sync}
-            connectSync={connectSync}
             pushLocalToSync={pushLocalToSync}
+            refresh={loadAll}
             busy={busy}
           />
         )}
@@ -840,9 +816,7 @@ function Reports({ cfg, allEntries, months, empName, clientName, rateOf }) {
 
 /* ================= setup ================= */
 
-function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, connectSync, pushLocalToSync, busy }) {
-  const [syncUrl, setSyncUrl] = useState(sync.url);
-  const [syncMsg, setSyncMsg] = useState("");
+function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, pushLocalToSync, refresh, busy }) {
   const [newEmp, setNewEmp] = useState({ name: "", role: "", rate: "", email: "" });
   const [newClient, setNewClient] = useState("");
   const [newSvc, setNewSvc] = useState("");
@@ -893,36 +867,30 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, connectSync, 
     <>
       <Card
         title="Where the data lives"
-        note="Left empty, this file keeps everything in your own browser and nobody else sees it. Paste the shared endpoint and the whole team writes to one book."
-      >
-        <div className="flex flex-wrap items-end gap-3">
-          <div style={{ width: 420 }}>
-            <Label>Shared endpoint</Label>
-            <Field value={syncUrl} onChange={setSyncUrl} placeholder="https://script.google.com/macros/s/..../exec" />
-          </div>
-          <Btn
-            kind="solid"
-            disabled={busy}
-            onClick={async () => {
-              setSyncMsg("Checking");
-              const r = await connectSync(syncUrl);
-              setSyncMsg(r.ok ? (syncUrl.trim() ? "Connected" : "Sync off") : `Could not connect. ${r.error}`);
-            }}
-          >
-            {syncUrl.trim() ? "Connect" : "Turn sync off"}
+        note="Everyone using this app automatically shares one book — there's nothing to connect. A local copy is still written on every save, so a brief outage never costs anyone their work."
+        right={
+          <Btn onClick={refresh} disabled={busy}>
+            {busy ? "Checking…" : "Check connection"}
           </Btn>
-          <Btn onClick={pushLocalToSync} disabled={!sync.url || busy}>
-            Push this browser's data up
+        }
+      >
+        <p className="text-sm" style={{ color: sync.online ? BRAND.slate : BRAND.red }}>
+          {sync.online
+            ? "Connected. Everyone signed in sees the same data."
+            : `Shared storage unreachable: ${sync.error} Entries are still saving locally on this device.`}
+        </p>
+        {!sync.online && (
+          <p className="text-xs mt-2" style={{ color: BRAND.slate }}>
+            If this is a brand-new deployment, the Vercel project likely needs a Redis database connected: Vercel
+            dashboard → Storage → Create Database → pick a Redis option (Upstash) → connect it to this project →
+            redeploy.
+          </p>
+        )}
+        <div className="mt-3">
+          <Btn onClick={pushLocalToSync} disabled={busy}>
+            Push this browser's data to shared storage
           </Btn>
         </div>
-        <p className="text-sm mt-3" style={{ color: sync.error ? BRAND.red : BRAND.slate }}>
-          {syncMsg ||
-            (!sync.url
-              ? "Running on this browser only. Time entered here stays here."
-              : sync.online
-              ? "Connected to the shared book. A local copy is still written every time, so an outage never costs anyone their week."
-              : `Shared book unreachable. ${sync.error} Entries are still saving locally.`)}
-        </p>
       </Card>
 
       <Card

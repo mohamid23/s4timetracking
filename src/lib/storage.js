@@ -1,5 +1,4 @@
 const LOCAL_PREFIX = "s4tt.local.";
-const SYNC_URL_KEY = "s4tt.sync.url";
 
 const mem = {};
 
@@ -35,42 +34,23 @@ const ls = {
   },
 };
 
-/* Two ways to run.
-   Local only: everything sits in this browser, which is fine for one person or a trial.
-   Synced: point the app at a Google Apps Script endpoint and the whole team shares one book.
-   Either way a local copy is always written, so a sync outage never costs anyone their week. */
+/* The shared backend is a Vercel serverless function (/api/store) backed by
+   Vercel KV, deployed as part of this same project — every browser talks to
+   it automatically, nothing to configure. A local copy is always written
+   too, so a storage outage never costs anyone their week; it just means
+   this browser is temporarily the only one that's seen the change. */
 export const S = {
-  mode: "local",
-  url: "",
   online: true,
   onStatus: null,
   onError: null,
 
-  setUrl(url) {
-    this.url = (url || "").trim();
-    this.mode = this.url ? "remote" : "local";
-    this.online = true;
-    try {
-      if (this.url) window.localStorage.setItem(SYNC_URL_KEY, this.url);
-      else window.localStorage.removeItem(SYNC_URL_KEY);
-    } catch {}
-  },
-
-  loadUrl() {
-    try {
-      const u = window.localStorage.getItem(SYNC_URL_KEY);
-      if (u) this.setUrl(u);
-    } catch {}
-    return this.url;
-  },
-
   async call(action, payload) {
-    const res = await fetch(this.url, {
+    const res = await fetch("/api/store", {
       method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, ...payload }),
     });
-    if (!res.ok) throw new Error("Sync endpoint returned " + res.status);
+    if (!res.ok) throw new Error("Shared storage returned " + res.status);
     const json = await res.json();
     if (json.error) throw new Error(json.error);
     return json;
@@ -86,59 +66,40 @@ export const S = {
     if (!ok && this.onError) this.onError(err);
   },
 
-  async ping(url) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action: "ping" }),
-    });
-    if (!res.ok) throw new Error("Endpoint returned " + res.status);
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "Endpoint did not answer as expected");
-    return true;
-  },
-
   async get(key) {
-    if (this.mode === "remote") {
-      try {
-        const r = await this.call("get", { key });
-        this.flag(true);
-        const val = r.value == null ? null : JSON.parse(r.value);
-        if (val !== null) ls.set(key, val);
-        return val;
-      } catch (e) {
-        this.flag(false, e.message);
-      }
+    try {
+      const r = await this.call("get", { key });
+      this.flag(true);
+      const val = r.value == null ? null : JSON.parse(r.value);
+      if (val !== null) ls.set(key, val);
+      return val;
+    } catch (e) {
+      this.flag(false, e.message);
+      return ls.get(key);
     }
-    return ls.get(key);
   },
 
   async set(key, value) {
     ls.set(key, value);
-    if (this.mode === "remote") {
-      try {
-        await this.call("set", { key, value: JSON.stringify(value) });
-        this.flag(true);
-        return true;
-      } catch (e) {
-        this.flag(false, e.message);
-        return false;
-      }
+    try {
+      await this.call("set", { key, value: JSON.stringify(value) });
+      this.flag(true);
+      return true;
+    } catch (e) {
+      this.flag(false, e.message);
+      return false;
     }
-    return true;
   },
 
   async list(prefix) {
-    if (this.mode === "remote") {
-      try {
-        const r = await this.call("list", { prefix });
-        this.flag(true);
-        return r.keys || [];
-      } catch (e) {
-        this.flag(false, e.message);
-      }
+    try {
+      const r = await this.call("list", { prefix });
+      this.flag(true);
+      return r.keys || [];
+    } catch (e) {
+      this.flag(false, e.message);
+      return ls.keys(prefix);
     }
-    return ls.keys(prefix);
   },
 
   async getPersonal(key) {
@@ -159,36 +120,38 @@ export const S = {
       existing.push(row);
       ls.set(key, existing.slice(-500));
     } catch {}
-    if (this.mode === "remote") {
-      this.call("log", { kind, entry: row }).catch(() => {});
-    }
+    this.call("log", { kind, entry: row }).catch(() => {});
   },
 
-  /* Local-only fallback so the log viewer has something to show even without a
-     shared endpoint connected; remote mode merges in what the backend has too. */
+  /* Local-only fallback so the log viewer has something to show even if the
+     shared store is temporarily unreachable; normally this just merges in
+     what the backend has. */
   async listLogs(kind, limit = 200) {
     const localKey = kind === "error" ? "s4tt:log:error" : "s4tt:log:activity";
     const local = (ls.get(localKey) || []).slice(-limit).reverse();
-    if (this.mode !== "remote") return local;
     try {
       const r = await this.call("listLogs", { kind, limit });
       this.flag(true);
-      return r.rows || local;
+      return r.rows && r.rows.length ? r.rows : local;
     } catch (e) {
       this.flag(false, e.message);
       return local;
     }
   },
 
-  async invite({ email, role, inviter, appUrl }) {
-    if (this.mode !== "remote") return { ok: false, error: "Connect the shared endpoint under Setup first." };
-    try {
-      const r = await this.call("invite", { email, role, inviter, appUrl });
-      this.flag(true);
-      return r.error ? { ok: false, error: r.error } : { ok: true };
-    } catch (e) {
-      this.flag(false, e.message);
-      return { ok: false, error: e.message };
-    }
+  /* No backend email service — this opens the person's own mail client with
+     the message pre-filled, same spirit as the rest of the app (nothing here
+     needs a third-party account to work). */
+  async invite({ email, role, inviter }) {
+    const subject = "You've been added to S4 Connect Time and Profitability";
+    const body =
+      `Hi,\n\n${inviter} added you to S4 Connect's time and profitability tool as a ${role}.\n\n` +
+      `Open it here: ${window.location.origin}\n\n` +
+      `Sign in with this email address: ${email}\n`;
+    window.open(
+      `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+      "_blank"
+    );
+    return { ok: true };
   },
 };

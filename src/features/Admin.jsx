@@ -90,19 +90,8 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
       : [...cfg.employees, { id: uid(), name, email, role: "", rate: 0, accessLevel: form.role, managedClients: [] }];
     await saveCfg({ ...cfg, employees: next });
 
-    if (!sync.url) {
-      setStatus(`${name} was added with the ${ROLE_LABEL[form.role]} role. Connect the shared endpoint under Setup to also email them.`);
-      setBusy(false);
-      setForm({ name: "", email: "", role: ROLES.CONTRIBUTOR });
-      refreshLogs();
-      return;
-    }
-    const r = await S.invite({ email, role: ROLE_LABEL[form.role], inviter: meRecord?.name || "the team", appUrl: window.location.origin });
-    setStatus(
-      r.ok
-        ? `${name} was added and emailed at ${email}.`
-        : `${name} was added, but the invitation email failed to send: ${r.error}`
-    );
+    const r = await S.invite({ email, role: ROLE_LABEL[form.role], inviter: meRecord?.name || "the team" });
+    setStatus(`${name} was added. An email to ${email} just opened in your mail app — send it to let them know.`);
     setBusy(false);
     setForm({ name: "", email: "", role: ROLES.CONTRIBUTOR });
     refreshLogs();
@@ -114,18 +103,13 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
       setRowStatus((p) => ({ ...p, [emp.id]: "No email on file — add one under Setup first." }));
       return;
     }
-    if (!sync.url) {
-      setRowStatus((p) => ({ ...p, [emp.id]: "Connect the shared endpoint under Setup first." }));
-      return;
-    }
     setSendingId(emp.id);
-    const r = await S.invite({
+    await S.invite({
       email,
       role: ROLE_LABEL[emp.accessLevel || ROLES.CONTRIBUTOR],
       inviter: meRecord?.name || "the team",
-      appUrl: window.location.origin,
     });
-    setRowStatus((p) => ({ ...p, [emp.id]: r.ok ? `Emailed at ${email}.` : `Failed to send: ${r.error}` }));
+    setRowStatus((p) => ({ ...p, [emp.id]: `An email to ${email} just opened in your mail app.` }));
     setSendingId(null);
     refreshLogs();
   };
@@ -134,7 +118,7 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
     <>
       <Card
         title="Invite a teammate"
-        note="Adds them to the team list with a role and, if the shared endpoint is connected, emails them to let them know."
+        note="Adds them to the team list with a role, and opens an email in your own mail app to let them know."
       >
         <div className="flex flex-wrap items-end gap-3">
           <div style={{ width: 200 }}>
@@ -158,9 +142,10 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
             {status}
           </p>
         )}
-        {!sync.url && (
+        {!sync.online && (
           <p className="text-xs mt-2" style={{ color: BRAND.amber }}>
-            No shared endpoint connected — teammates are added locally only until you connect one under Setup.
+            Shared storage is unreachable right now — this teammate was added on this device only and will sync once
+            it's back. See Setup for details.
           </p>
         )}
       </Card>
@@ -204,7 +189,7 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
 
       <Card
         title="Activity log"
-        note="Sign-ins, config changes, and revenue imports. Kept locally on this device, and on the shared endpoint if connected."
+        note="Sign-ins, config changes, and revenue imports. Kept locally on this device, and in shared storage once connected."
         right={
           <Btn onClick={refreshLogs} disabled={busy}>
             Refresh
