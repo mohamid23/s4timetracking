@@ -166,10 +166,12 @@ function App() {
   };
 
   const signOut = async () => {
+    const wasDemo = demo;
     setMe("");
     setDemo(false);
     await S.setPersonal(ME_KEY, { emp: "" });
     setTab("entry");
+    if (wasDemo) await loadAll(); // demo data is in-memory only; restore the real book
   };
 
   const enterDemo = () => {

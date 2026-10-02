@@ -1,4 +1,4 @@
-import { Redis } from "@upstash/redis";
+import { redisFromEnv, NOT_CONNECTED_MESSAGE } from "./_lib/redis.js";
 
 /* The app's entire shared backend: one serverless function, one Redis store,
    both provisioned from the same Vercel project this deploys from. No
@@ -8,31 +8,10 @@ import { Redis } from "@upstash/redis";
    Protocol mirrors a tiny key/value store: get, set, list keys by prefix,
    plus an append-only log for activity/errors. "list" is backed by a
    separate index set since Redis doesn't do prefix scans by key pattern
-   cheaply at this scale without one.
-
-   Env var names vary by how the Redis integration was connected in the
-   Vercel dashboard (Storage → Create Database, or Marketplace → Upstash),
-   so this checks the handful of names Vercel is known to use rather than
-   assuming one. */
-function redisFromEnv() {
-  const pairs = [
-    ["UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"],
-    ["KV_REST_API_URL", "KV_REST_API_TOKEN"],
-    ["REDIS_REST_API_URL", "REDIS_REST_API_TOKEN"],
-  ];
-  for (const [urlKey, tokenKey] of pairs) {
-    if (process.env[urlKey] && process.env[tokenKey]) {
-      return new Redis({ url: process.env[urlKey], token: process.env[tokenKey] });
-    }
-  }
-  return null;
-}
+   cheaply at this scale without one. */
 
 const KEY_INDEX = "s4tt:__keys__";
 const LOG_MAX = 2000;
-
-const NOT_CONNECTED_MESSAGE =
-  "Shared storage isn't connected in this Vercel project yet. In the Vercel dashboard: Storage → Create Database → pick a Redis option (Upstash) → connect it to this project → redeploy.";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {

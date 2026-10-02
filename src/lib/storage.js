@@ -139,19 +139,39 @@ export const S = {
     }
   },
 
-  /* No backend email service — this opens the person's own mail client with
-     the message pre-filled, same spirit as the rest of the app (nothing here
-     needs a third-party account to work). */
-  async invite({ email, role, inviter }) {
-    const subject = "You've been added to S4 Connect Time and Profitability";
-    const body =
-      `Hi,\n\n${inviter} added you to S4 Connect's time and profitability tool as a ${role}.\n\n` +
-      `Open it here: ${window.location.origin}\n\n` +
-      `Sign in with this email address: ${email}\n`;
-    window.open(
-      `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
-      "_blank"
-    );
-    return { ok: true };
+  async auth(action, payload) {
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ...payload }),
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: "Can't reach the shared account service right now." };
+    }
+  },
+
+  async hasPassword(email) {
+    const r = await this.auth("hasPassword", { email });
+    return !!r.hasPassword;
+  },
+
+  async login(email, password) {
+    return this.auth("login", { email, password });
+  },
+
+  /* Emails a time-limited link so the setup step proves the person actually
+     controls that inbox, rather than just typing a name they found. */
+  async requestSetup({ email, name, inviter }) {
+    return this.auth("requestSetup", { email, name, inviter, appUrl: window.location.origin });
+  },
+
+  async verifySetupToken(token) {
+    return this.auth("verifySetupToken", { token });
+  },
+
+  async setPassword(token, password) {
+    return this.auth("setPassword", { token, password });
   },
 };

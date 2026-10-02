@@ -90,8 +90,12 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
       : [...cfg.employees, { id: uid(), name, email, role: "", rate: 0, accessLevel: form.role, managedClients: [] }];
     await saveCfg({ ...cfg, employees: next });
 
-    const r = await S.invite({ email, role: ROLE_LABEL[form.role], inviter: meRecord?.name || "the team" });
-    setStatus(`${name} was added. An email to ${email} just opened in your mail app — send it to let them know.`);
+    const r = await S.requestSetup({ email, name, inviter: meRecord?.name || "the team" });
+    setStatus(
+      r.ok
+        ? `${name} was added and emailed at ${email} to set a password.`
+        : `${name} was added, but the invitation email failed to send: ${r.error}`
+    );
     setBusy(false);
     setForm({ name: "", email: "", role: ROLES.CONTRIBUTOR });
     refreshLogs();
@@ -104,12 +108,11 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
       return;
     }
     setSendingId(emp.id);
-    await S.invite({
-      email,
-      role: ROLE_LABEL[emp.accessLevel || ROLES.CONTRIBUTOR],
-      inviter: meRecord?.name || "the team",
-    });
-    setRowStatus((p) => ({ ...p, [emp.id]: `An email to ${email} just opened in your mail app.` }));
+    const r = await S.requestSetup({ email, name: emp.name, inviter: meRecord?.name || "the team" });
+    setRowStatus((p) => ({
+      ...p,
+      [emp.id]: r.ok ? `Emailed at ${email} to set a password.` : `Failed to send: ${r.error}`,
+    }));
     setSendingId(null);
     refreshLogs();
   };
@@ -118,7 +121,7 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
     <>
       <Card
         title="Invite a teammate"
-        note="Adds them to the team list with a role, and opens an email in your own mail app to let them know."
+        note="Adds them to the team list with a role, and emails them a link to set their own password."
       >
         <div className="flex flex-wrap items-end gap-3">
           <div style={{ width: 200 }}>
@@ -152,7 +155,7 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
 
       <Card
         title="Send an invite to an existing teammate"
-        note="Everyone already on the team list, with a one-click email reminding them where to sign in."
+        note="Everyone already on the team list, with a one-click email to set a password and sign in."
       >
         <div className="overflow-x-auto">
           <table className="w-full border-collapse">
