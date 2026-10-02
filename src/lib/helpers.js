@@ -78,6 +78,27 @@ export const toNumber = (v) => {
   return /^\s*\(/.test(String(v)) ? -n : n;
 };
 
+/* Simple least-squares trend over a short recent history. Used only for a
+   directional "projected next period" cue, never shown as a firm number with
+   fewer than 3 data points behind it. */
+export function linearForecast(values) {
+  const n = values.length;
+  if (n < 2) return { slope: 0, next: values[0] || 0 };
+  const xs = values.map((_, i) => i);
+  const xMean = xs.reduce((a, b) => a + b, 0) / n;
+  const yMean = values.reduce((a, b) => a + b, 0) / n;
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < n; i++) {
+    num += (xs[i] - xMean) * (values[i] - yMean);
+    den += (xs[i] - xMean) ** 2;
+  }
+  const slope = den === 0 ? 0 : num / den;
+  const intercept = yMean - slope * xMean;
+  const next = slope * n + intercept;
+  return { slope, next };
+}
+
 export function downloadCSV(filename, rows) {
   const csv = Papa.unparse(rows);
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });

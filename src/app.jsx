@@ -40,6 +40,7 @@ import { buildDemoBook } from "./lib/demoData";
 import { S4Mark, Label, Card, Btn, Field, Select, Th, Td, Bar, Stat, CsvInput, Pill } from "./components/ui";
 import { RankedBarChart } from "./components/charts";
 import SignIn from "./features/SignIn";
+import Profitability from "./features/Profitability";
 
 /* ================= app ================= */
 
@@ -344,6 +345,7 @@ function App() {
             saveFinance={saveFinance}
             clientById={clientById}
             clientName={clientName}
+            empName={empName}
             rateOf={rateOf}
             meRecord={meRecord}
           />
@@ -377,11 +379,14 @@ function App() {
 function EnterTime({ cfg, me, entries, saveMonth, clientById }) {
   const [weekStart, setWeekStart] = useState(mondayOf(todayISO()));
   const [newClient, setNewClient] = useState("");
+  const [newProject, setNewProject] = useState("");
   const [newService, setNewService] = useState("");
   const [extraLines, setExtraLines] = useState([]);
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   const weekMonths = useMemo(() => [...new Set(days.map(ymOf))], [days]);
+  const projectsByClient = (clientId) => (cfg.projects || []).filter((p) => p.clientId === clientId && p.active !== false);
+  const projectName = (projectId) => (cfg.projects || []).find((p) => p.id === projectId)?.name || "";
 
   const weekEntries = useMemo(() => {
     const all = weekMonths.flatMap((ym) => entries[ym] || []);
@@ -391,47 +396,52 @@ function EnterTime({ cfg, me, entries, saveMonth, clientById }) {
   const lines = useMemo(() => {
     const map = new Map();
     weekEntries.forEach((e) => {
-      const k = `${e.client}||${e.svc}`;
-      if (!map.has(k)) map.set(k, { client: e.client, svc: e.svc });
+      const k = `${e.client}||${e.project || ""}||${e.svc}`;
+      if (!map.has(k)) map.set(k, { client: e.client, project: e.project || "", svc: e.svc });
     });
     extraLines.forEach((l) => {
-      const k = `${l.client}||${l.svc}`;
+      const k = `${l.client}||${l.project || ""}||${l.svc}`;
       if (!map.has(k)) map.set(k, l);
     });
     return [...map.entries()].map(([k, v]) => ({ key: k, ...v }));
   }, [weekEntries, extraLines]);
 
-  const hoursAt = (client, svc, date) => {
-    const hit = weekEntries.find((e) => e.client === client && e.svc === svc && e.date === date);
+  const hoursAt = (client, project, svc, date) => {
+    const hit = weekEntries.find((e) => e.client === client && (e.project || "") === project && e.svc === svc && e.date === date);
     return hit ? hit.hours : "";
   };
 
-  const commit = async (client, svc, date, raw) => {
+  const commit = async (client, project, svc, date, raw) => {
     const ym = ymOf(date);
     const value = raw === "" ? null : Math.max(0, toNumber(raw));
     const rows = [...(entries[ym] || [])];
-    const idx = rows.findIndex((e) => e.emp === me && e.client === client && e.svc === svc && e.date === date);
+    const idx = rows.findIndex(
+      (e) => e.emp === me && e.client === client && (e.project || "") === project && e.svc === svc && e.date === date
+    );
     if (value === null || value === 0) {
       if (idx >= 0) rows.splice(idx, 1);
       else return;
     } else if (idx >= 0) {
       rows[idx] = { ...rows[idx], hours: value };
     } else {
-      rows.push({ id: uid(), emp: me, client, svc, date, hours: value, ts: Date.now() });
+      rows.push({ id: uid(), emp: me, client, project: project || null, svc, date, hours: value, ts: Date.now() });
     }
     await saveMonth(ym, rows);
   };
 
   const addLine = () => {
     if (!newClient || !newService) return;
-    setExtraLines((prev) => [...prev, { client: newClient, svc: newService }]);
+    setExtraLines((prev) => [...prev, { client: newClient, project: newProject, svc: newService }]);
     setNewClient("");
+    setNewProject("");
     setNewService("");
   };
 
   const dayTotal = (date) => weekEntries.filter((e) => e.date === date).reduce((s, e) => s + Number(e.hours || 0), 0);
-  const rowTotal = (client, svc) =>
-    weekEntries.filter((e) => e.client === client && e.svc === svc).reduce((s, e) => s + Number(e.hours || 0), 0);
+  const rowTotal = (client, project, svc) =>
+    weekEntries
+      .filter((e) => e.client === client && (e.project || "") === project && e.svc === svc)
+      .reduce((s, e) => s + Number(e.hours || 0), 0);
   const weekTotal = weekEntries.reduce((s, e) => s + Number(e.hours || 0), 0);
 
   if (!me) return null;
@@ -457,8 +467,9 @@ function EnterTime({ cfg, me, entries, saveMonth, clientById }) {
           <table className="w-full border-collapse" style={{ minWidth: 860 }}>
             <thead>
               <tr>
-                <Th w="26%">Client</Th>
-                <Th w="24%">Service type</Th>
+                <Th w="22%">Client</Th>
+                <Th w="16%">Project</Th>
+                <Th w="20%">Service type</Th>
                 {days.map((d, i) => (
                   <Th key={d} align="center">
                     <div>{DAY_LABELS[i]}</div>
@@ -473,7 +484,7 @@ function EnterTime({ cfg, me, entries, saveMonth, clientById }) {
             <tbody>
               {lines.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="px-3 py-6 text-sm" style={{ color: BRAND.slate }}>
+                  <td colSpan={11} className="px-3 py-6 text-sm" style={{ color: BRAND.slate }}>
                     No lines yet this week. Add a client and service type below and the grid opens up.
                   </td>
                 </tr>
@@ -482,20 +493,24 @@ function EnterTime({ cfg, me, entries, saveMonth, clientById }) {
                 <tr key={l.key}>
                   <Td>{clientById[l.client]?.name || l.client}</Td>
                   <Td>
+                    <span style={{ color: BRAND.slate }}>{l.project ? projectName(l.project) : "—"}</span>
+                  </Td>
+                  <Td>
                     <span style={{ color: isBillable(l.svc) ? BRAND.navy : BRAND.amber }}>{l.svc}</span>
                   </Td>
                   {days.map((d) => (
                     <td key={d} className="px-1 py-1 border-b" style={{ borderColor: BRAND.line }}>
-                      <HourCell value={hoursAt(l.client, l.svc, d)} onCommit={(v) => commit(l.client, l.svc, d, v)} />
+                      <HourCell value={hoursAt(l.client, l.project, l.svc, d)} onCommit={(v) => commit(l.client, l.project, l.svc, d, v)} />
                     </td>
                   ))}
                   <Td align="right" mono strong>
-                    {rowTotal(l.client, l.svc) ? hrs(rowTotal(l.client, l.svc)) : ""}
+                    {rowTotal(l.client, l.project, l.svc) ? hrs(rowTotal(l.client, l.project, l.svc)) : ""}
                   </Td>
                 </tr>
               ))}
               <tr style={{ background: BRAND.wash }}>
                 <Td strong>Daily total</Td>
+                <Td></Td>
                 <Td></Td>
                 {days.map((d) => (
                   <Td key={d} align="center" mono strong>
@@ -511,11 +526,14 @@ function EnterTime({ cfg, me, entries, saveMonth, clientById }) {
         </div>
 
         <div className="mt-4 flex flex-wrap items-end gap-3">
-          <div style={{ width: 240 }}>
+          <div style={{ width: 220 }}>
             <Label>Add a client line</Label>
             <Select
               value={newClient}
-              onChange={setNewClient}
+              onChange={(v) => {
+                setNewClient(v);
+                setNewProject("");
+              }}
               placeholder="Select client"
               options={cfg.clients
                 .filter((c) => c.active !== false)
@@ -524,7 +542,18 @@ function EnterTime({ cfg, me, entries, saveMonth, clientById }) {
                 .map((c) => ({ value: c.id, label: c.name }))}
             />
           </div>
-          <div style={{ width: 260 }}>
+          {newClient && projectsByClient(newClient).length > 0 && (
+            <div style={{ width: 200 }}>
+              <Label>Project</Label>
+              <Select
+                value={newProject}
+                onChange={setNewProject}
+                placeholder="General (no project)"
+                options={projectsByClient(newClient).map((p) => ({ value: p.id, label: p.name }))}
+              />
+            </div>
+          )}
+          <div style={{ width: 240 }}>
             <Label>Service type</Label>
             <Select value={newService} onChange={setNewService} placeholder="Select service type" options={cfg.services} />
           </div>
@@ -791,325 +820,6 @@ function Reports({ cfg, allEntries, months, empName, clientName, rateOf }) {
             </tbody>
           </table>
         </div>
-      </Card>
-    </>
-  );
-}
-
-/* ================= profitability ================= */
-
-function Profitability({ cfg, entries, finance, months, saveFinance, clientById, clientName, rateOf, meRecord }) {
-  const thisMonth = todayISO().slice(0, 7);
-  const [ym, setYm] = useState(months.includes(thisMonth) ? thisMonth : months[months.length - 1] || thisMonth);
-  const [view, setView] = useState("client");
-
-  const scopedClientIds = isAdminLevel(meRecord?.accessLevel) ? null : meRecord?.managedClients || [];
-  const inScope = (clientId) => scopedClientIds === null || scopedClientIds.includes(clientId);
-
-  const finRows = (finance[ym] || []).filter((f) => {
-    const hit = cfg.clients.find((c) => norm(c.name) === norm(f.client));
-    return !hit || inScope(hit.id);
-  });
-  const monthEntries = (entries[ym] || []).filter((e) => inScope(e.client));
-
-  const importFinance = (raw) => {
-    const rows = raw
-      .map((r) => ({
-        id: uid(),
-        client: clean(pickCol(r, ["client", "client name", "customer", "account"])),
-        svc: clean(pickCol(r, ["service type", "service", "servicetype", "category"])),
-        revenue: toNumber(pickCol(r, ["revenue", "rev", "income", "sales"])),
-        cogs: toNumber(pickCol(r, ["cogs", "expense", "cost", "direct cost", "pass through"])),
-      }))
-      .filter((r) => r.client);
-    saveFinance(ym, rows);
-  };
-
-  const matchClientId = (name) => {
-    const hit = cfg.clients.find((c) => norm(c.name) === norm(name));
-    return hit?.id || null;
-  };
-
-  const laborFor = (clientId, svc) =>
-    monthEntries
-      .filter((e) => e.client === clientId && (svc == null || e.svc === svc))
-      .reduce((s, e) => s + Number(e.hours || 0) * rateOf(e.emp), 0);
-
-  const hoursFor = (clientId, svc) =>
-    monthEntries
-      .filter((e) => e.client === clientId && (svc == null || e.svc === svc))
-      .reduce((s, e) => s + Number(e.hours || 0), 0);
-
-  const lines = useMemo(() => {
-    const map = new Map();
-    const seen = new Set();
-
-    finRows.forEach((f) => {
-      const cid = matchClientId(f.client);
-      const key = view === "client" ? f.client : f.svc || "Unassigned service";
-      if (!map.has(key)) map.set(key, { key, revenue: 0, cogs: 0, labor: 0, hours: 0, matched: !!cid });
-      const row = map.get(key);
-      row.revenue += f.revenue;
-      row.cogs += f.cogs;
-      if (cid) {
-        const svc = f.svc || null;
-        row.labor += laborFor(cid, svc);
-        row.hours += hoursFor(cid, svc);
-        seen.add(`${cid}||${f.svc || ""}`);
-        row.matched = true;
-      }
-    });
-
-    // billable time with no revenue line attached
-    monthEntries
-      .filter((e) => isBillable(e.svc))
-      .forEach((e) => {
-        const cid = e.client;
-        const combo = `${cid}||${e.svc}`;
-        if (seen.has(combo)) return;
-        const key = view === "client" ? clientName(cid) : e.svc;
-        if (!map.has(key)) map.set(key, { key, revenue: 0, cogs: 0, labor: 0, hours: 0, matched: false, orphan: true });
-        const row = map.get(key);
-        row.labor += Number(e.hours || 0) * rateOf(e.emp);
-        row.hours += Number(e.hours || 0);
-        row.orphan = true;
-      });
-
-    return [...map.values()]
-      .map((r) => ({ ...r, gp: r.revenue - r.cogs - r.labor, margin: r.revenue ? (r.revenue - r.cogs - r.labor) / r.revenue : null }))
-      .sort((a, b) => b.gp - a.gp);
-  }, [finRows, monthEntries, view, cfg.clients, cfg.employees]);
-
-  const internal = useMemo(() => {
-    const map = new Map();
-    monthEntries
-      .filter((e) => !isBillable(e.svc))
-      .forEach((e) => {
-        if (!map.has(e.svc)) map.set(e.svc, { key: e.svc, hours: 0, cost: 0 });
-        const r = map.get(e.svc);
-        r.hours += Number(e.hours || 0);
-        r.cost += Number(e.hours || 0) * rateOf(e.emp);
-      });
-    return [...map.values()].sort((a, b) => b.cost - a.cost);
-  }, [monthEntries, cfg.employees]);
-
-  const totals = lines.reduce(
-    (acc, r) => ({
-      revenue: acc.revenue + r.revenue,
-      cogs: acc.cogs + r.cogs,
-      labor: acc.labor + r.labor,
-      hours: acc.hours + r.hours,
-      gp: acc.gp + r.gp,
-    }),
-    { revenue: 0, cogs: 0, labor: 0, hours: 0, gp: 0 }
-  );
-  const internalCost = internal.reduce((s, r) => s + r.cost, 0);
-  const unmatched = finRows.filter((f) => !matchClientId(f.client));
-  const canImport = isAdminLevel(meRecord?.accessLevel);
-
-  return (
-    <>
-      {canImport && (
-        <Card
-          title="Monthly revenue and cost import"
-          note="One row per client and service type. Columns can be named loosely, the import looks for client, service type, revenue and COGS."
-          right={
-            <div style={{ width: 170 }}>
-              <Select value={ym} onChange={setYm} options={months.map((m) => ({ value: m, label: monthLabel(m) }))} />
-            </div>
-          }
-        >
-          <CsvInput label={`Load the ${monthLabel(ym)} file`} onRows={importFinance} />
-          {finRows.length > 0 && (
-            <p className="text-sm mt-3" style={{ color: BRAND.slate }}>
-              {num(finRows.length)} rows loaded for {monthLabel(ym)}, {money(finRows.reduce((s, f) => s + f.revenue, 0))} of
-              revenue. Loading again replaces the month.
-            </p>
-          )}
-          {unmatched.length > 0 && (
-            <div className="mt-3 border-l-4 p-3" style={{ borderColor: BRAND.amber, background: "#FFF8EC" }}>
-              <div className="text-sm font-semibold">
-                {num(unmatched.length)} rows have a client name that does not match the client list
-              </div>
-              <p className="text-xs mt-1" style={{ color: BRAND.slate }}>
-                Revenue still counts, but no time can be attached to it. Names in question:{" "}
-                {[...new Set(unmatched.map((u) => u.client))].slice(0, 8).join(", ")}. Fix the spelling in the file or add
-                the client in Setup.
-              </p>
-            </div>
-          )}
-        </Card>
-      )}
-      {!canImport && (
-        <div className="mb-6">
-          <Select value={ym} onChange={setYm} options={months.map((m) => ({ value: m, label: monthLabel(m) }))} width={170} />
-        </div>
-      )}
-
-      <Card
-        title={`Profitability, ${monthLabel(ym)}`}
-        note="Gross profit is revenue less COGS less the labor cost of time booked to that client or service type."
-        right={
-          <>
-            <Btn kind={view === "client" ? "solid" : "ghost"} onClick={() => setView("client")}>
-              By client
-            </Btn>
-            <Btn kind={view === "service" ? "solid" : "ghost"} onClick={() => setView("service")}>
-              By service type
-            </Btn>
-            <Btn
-              onClick={() =>
-                downloadCSV(
-                  `s4_profitability_${ym}_by_${view}.csv`,
-                  lines.map((r) => ({
-                    [view]: r.key,
-                    revenue: Math.round(r.revenue),
-                    cogs: Math.round(r.cogs),
-                    hours: r.hours,
-                    labor_cost: Math.round(r.labor),
-                    gross_profit: Math.round(r.gp),
-                    margin_pct: r.margin === null ? "" : Math.round(r.margin * 100),
-                  }))
-                )
-              }
-              disabled={!lines.length}
-            >
-              Download CSV
-            </Btn>
-          </>
-        }
-      >
-        <div className="flex flex-wrap gap-8 mb-4 pb-4 border-b" style={{ borderColor: BRAND.line }}>
-          <Stat label="Revenue" value={money(totals.revenue)} />
-          <Stat label="COGS" value={money(totals.cogs)} />
-          <Stat label="Client labor" value={money(totals.labor)} />
-          <Stat label="Gross profit" value={money(totals.gp)} color={totals.gp < 0 ? BRAND.red : BRAND.teal} />
-          <Stat
-            label="Margin"
-            value={totals.revenue ? `${num((totals.gp / totals.revenue) * 100, 0)}%` : "n/a"}
-            color={totals.gp < 0 ? BRAND.red : BRAND.navy}
-          />
-        </div>
-
-        {lines.length > 0 && (
-          <div className="mb-6 pb-6 border-b" style={{ borderColor: BRAND.line }}>
-            <div className="text-xs font-semibold mb-3" style={{ color: BRAND.navy }}>
-              Gross profit by {view === "client" ? "client" : "service type"}
-            </div>
-            <RankedBarChart data={lines.slice(0, 12)} labelKey="key" valueKey="gp" />
-          </div>
-        )}
-
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr>
-                <Th>{view === "client" ? "Client" : "Service type"}</Th>
-                <Th align="right">Revenue</Th>
-                <Th align="right">COGS</Th>
-                <Th align="right">Hours</Th>
-                <Th align="right">Labor</Th>
-                <Th align="right">Gross profit</Th>
-                <Th align="right">Margin</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map((r) => (
-                <tr key={r.key}>
-                  <Td>
-                    {r.key}
-                    {r.orphan && r.revenue === 0 && (
-                      <span className="ml-2 text-xs" style={{ color: BRAND.amber }}>
-                        time only, no revenue row
-                      </span>
-                    )}
-                  </Td>
-                  <Td align="right" mono>
-                    {money(r.revenue)}
-                  </Td>
-                  <Td align="right" mono>
-                    {money(r.cogs)}
-                  </Td>
-                  <Td align="right" mono>
-                    {hrs(r.hours)}
-                  </Td>
-                  <Td align="right" mono>
-                    {money(r.labor)}
-                  </Td>
-                  <Td align="right" mono strong>
-                    <span style={{ color: r.gp < 0 ? BRAND.red : BRAND.navy }}>{money(r.gp)}</span>
-                  </Td>
-                  <Td align="right" mono>
-                    {r.margin === null ? "n/a" : `${num(r.margin * 100, 0)}%`}
-                  </Td>
-                </tr>
-              ))}
-              {!lines.length && (
-                <tr>
-                  <td colSpan={7} className="px-3 py-6 text-sm" style={{ color: BRAND.slate }}>
-                    Load a revenue file for this month, or book some client time, and the analysis fills in.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-
-      <Card
-        title="Internal time is not in the numbers above"
-        note="Internal Admin, Operations, Tech, Sales Support and Research carry no revenue, so they sit here as an overhead pool rather than dragging a client into the red."
-      >
-        <div className="flex flex-wrap gap-8 mb-4">
-          <Stat label="Internal cost" value={money(internalCost)} color={BRAND.amber} />
-          <Stat
-            label="Gross profit after internal"
-            value={money(totals.gp - internalCost)}
-            color={totals.gp - internalCost < 0 ? BRAND.red : BRAND.teal}
-          />
-          <Stat
-            label="Internal share of hours"
-            value={
-              totals.hours + internal.reduce((s, r) => s + r.hours, 0)
-                ? `${num(
-                    (internal.reduce((s, r) => s + r.hours, 0) /
-                      (totals.hours + internal.reduce((s, r) => s + r.hours, 0))) *
-                      100,
-                    0
-                  )}%`
-                : "0%"
-            }
-          />
-        </div>
-        <table className="w-full border-collapse">
-          <thead>
-            <tr>
-              <Th>Service type</Th>
-              <Th align="right">Hours</Th>
-              <Th align="right">Cost</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {internal.map((r) => (
-              <tr key={r.key}>
-                <Td>{r.key}</Td>
-                <Td align="right" mono>
-                  {hrs(r.hours)}
-                </Td>
-                <Td align="right" mono>
-                  {money(r.cost)}
-                </Td>
-              </tr>
-            ))}
-            {!internal.length && (
-              <tr>
-                <td colSpan={3} className="px-3 py-4 text-sm" style={{ color: BRAND.slate }}>
-                  No internal time booked this month.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
       </Card>
     </>
   );
@@ -1401,6 +1111,24 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, connectSync, 
         </div>
       </Card>
 
+      <Card
+        title="Projects"
+        note="Optional. Add projects under a client to track hours, revenue and cost at a finer grain than the client as a whole. A client with no projects is tracked at the client level only, same as before."
+      >
+        <ProjectsEditor cfg={cfg} saveCfg={saveCfg} />
+      </Card>
+
+      <Card
+        title="Capabilities"
+        note="Groups service types into the practice-area lens leadership uses for profitability: which kind of work is driving the number, independent of client or channel mix."
+      >
+        <CapabilityEditor cfg={cfg} saveCfg={saveCfg} />
+      </Card>
+
+      <Card title="Industries" note="Tags you can assign to clients under Clients above, used to cut profitability by industry.">
+        <IndustryEditor cfg={cfg} saveCfg={saveCfg} />
+      </Card>
+
       <Card title="Service types" note="Anything starting with COS- is treated as client work. Everything else is internal overhead.">
         <div className="flex flex-wrap gap-2 mb-4">
           {cfg.services.map((s) => (
@@ -1473,6 +1201,150 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, connectSync, 
         </p>
       </Card>
     </>
+  );
+}
+
+function ProjectsEditor({ cfg, saveCfg }) {
+  const [clientId, setClientId] = useState(cfg.clients[0]?.id || "");
+  const [newName, setNewName] = useState("");
+  const projects = cfg.projects || [];
+  const clientProjects = projects.filter((p) => p.clientId === clientId);
+
+  const addProject = () => {
+    if (!clientId || !newName.trim()) return;
+    saveCfg({ ...cfg, projects: [...projects, { id: uid(), clientId, name: newName.trim(), active: true }] });
+    setNewName("");
+  };
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-end gap-3 mb-3">
+        <div style={{ width: 260 }}>
+          <Label>Client</Label>
+          <Select
+            value={clientId}
+            onChange={setClientId}
+            options={cfg.clients.slice().sort((a, b) => a.name.localeCompare(b.name)).map((c) => ({ value: c.id, label: c.name }))}
+          />
+        </div>
+        <div style={{ width: 260 }}>
+          <Label>New project name</Label>
+          <Field value={newName} onChange={setNewName} placeholder="e.g. Spring Campaign" />
+        </div>
+        <Btn kind="solid" onClick={addProject} disabled={!clientId || !newName.trim()}>
+          Add project
+        </Btn>
+      </div>
+      {clientProjects.length === 0 ? (
+        <p className="text-sm" style={{ color: BRAND.slate }}>
+          No projects under this client yet.
+        </p>
+      ) : (
+        <table className="w-full border-collapse">
+          <thead>
+            <tr>
+              <Th>Project</Th>
+              <Th align="center" w="110px">In the list</Th>
+              <Th w="90px"></Th>
+            </tr>
+          </thead>
+          <tbody>
+            {clientProjects.map((p) => (
+              <tr key={p.id}>
+                <Td>
+                  <Field
+                    value={p.name}
+                    onChange={(v) => saveCfg({ ...cfg, projects: projects.map((x) => (x.id === p.id ? { ...x, name: v } : x)) })}
+                  />
+                </Td>
+                <Td align="center">
+                  <Btn
+                    kind={p.active === false ? "ghost" : "teal"}
+                    onClick={() =>
+                      saveCfg({ ...cfg, projects: projects.map((x) => (x.id === p.id ? { ...x, active: x.active === false } : x)) })
+                    }
+                  >
+                    {p.active === false ? "Hidden" : "Active"}
+                  </Btn>
+                </Td>
+                <Td align="right">
+                  <Btn kind="danger" onClick={() => saveCfg({ ...cfg, projects: projects.filter((x) => x.id !== p.id) })}>
+                    Remove
+                  </Btn>
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function CapabilityEditor({ cfg, saveCfg }) {
+  const map = cfg.capabilityMap || DEFAULT_CAPABILITY_MAP;
+  const setMapping = (svc, capability) => saveCfg({ ...cfg, capabilityMap: { ...map, [svc]: capability } });
+  return (
+    <table className="w-full border-collapse">
+      <thead>
+        <tr>
+          <Th>Service type</Th>
+          <Th>Capability</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {cfg.services.map((s) => (
+          <tr key={s}>
+            <Td>
+              <span style={{ color: isBillable(s) ? BRAND.navy : BRAND.amber }}>{s}</span>
+            </Td>
+            <Td>
+              <Field value={map[s] || ""} onChange={(v) => setMapping(s, v)} placeholder="e.g. Paid Media" />
+            </Td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function IndustryEditor({ cfg, saveCfg }) {
+  const [newIndustry, setNewIndustry] = useState("");
+  const industries = cfg.industries || DEFAULT_INDUSTRIES;
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2 mb-4">
+        {industries.map((ind) => (
+          <span
+            key={ind}
+            className="text-xs px-2 py-1 border flex items-center gap-2"
+            style={{ borderColor: BRAND.line, color: BRAND.navy, background: "#fff" }}
+          >
+            {ind}
+            <button
+              onClick={() => saveCfg({ ...cfg, industries: industries.filter((x) => x !== ind) })}
+              style={{ color: BRAND.slate }}
+              title="Remove"
+            >
+              x
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-2" style={{ maxWidth: 420 }}>
+        <Field value={newIndustry} onChange={setNewIndustry} placeholder="New industry" />
+        <Btn
+          kind="solid"
+          disabled={!newIndustry.trim() || industries.includes(newIndustry.trim())}
+          onClick={() => {
+            saveCfg({ ...cfg, industries: [...industries, newIndustry.trim()] });
+            setNewIndustry("");
+          }}
+        >
+          Add
+        </Btn>
+      </div>
+    </div>
   );
 }
 
