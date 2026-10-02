@@ -1,525 +1,45 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { createRoot } from "react-dom/client";
-import Papa from "papaparse";
 
-/* S4 Connect: Time and Profitability
-   Internal management tool. Time entry, hours reporting, client profitability.
-   Data lives in the artifact's shared storage so everyone on the link sees the same book. */
-
-const BRAND = {
-  navy: "#1C243A",
-  slate: "#4A566E",
-  line: "#E2E6EE",
-  wash: "#F5F7FA",
-  teal: "#0E8F8F",
-  amber: "#C8811F",
-  red: "#B3402F",
-  paper: "#FFFFFF",
-};
-
-const PREFIX = "s4tt:";
-const CONFIG_KEY = PREFIX + "config";
-const ME_KEY = PREFIX + "me";
-const entriesKey = (ym) => `${PREFIX}entries:${ym}`;
-const financeKey = (ym) => `${PREFIX}finance:${ym}`;
-
-const DEFAULT_SERVICES = [
-  "COS-Client Website Creation",
-  "COS-Client Website Maintenance",
-  "COS-Direct Mail",
-  "COS-Display",
-  "COS-Event",
-  "COS-General Management",
-  "COS-Marketing Consulting",
-  "COS-Merchandise",
-  "COS-OOH",
-  "COS-Photo/Video",
-  "COS-PPC",
-  "COS-Radio/Digital Audio",
-  "Internal Admin",
-  "Operations",
-  "Tech",
-  "Sales Support",
-  "Research",
-];
-
-/* Client wall from the S4 Connect site. Set anyone no longer active to hidden in Setup
-   so the time entry dropdown stays short. */
-const DEFAULT_CLIENTS = [
-  { id: "jet-s-pizza", name: "Jet's Pizza", active: true },
-  { id: "whenevergolf", name: "WheneverGolf", active: true },
-  { id: "schaeffler", name: "Schaeffler", active: true },
-  { id: "tailored-real-estate-solutions", name: "Tailored Real Estate Solutions", active: true },
-  { id: "ann-arbor-comedy-showcase", name: "Ann Arbor Comedy Showcase", active: true },
-  { id: "arcadia-lending", name: "Arcadia Lending", active: true },
-  { id: "cutting-edge-computers", name: "Cutting Edge Computers", active: true },
-  { id: "celebrity-catering", name: "Celebrity Catering", active: true },
-  { id: "cadillac", name: "Cadillac", active: true },
-  { id: "cottage-inn-pizza", name: "Cottage Inn Pizza", active: true },
-  { id: "rocking-mobility", name: "Rocking Mobility", active: true },
-  { id: "custom-kitchen-solutions", name: "Custom Kitchen Solutions", active: true },
-  { id: "golf-stream-group", name: "Golf Stream Group", active: true },
-  { id: "house-of-barbecue", name: "House of Barbecue", active: true },
-  { id: "jerry-buys-houses", name: "Jerry Buys Houses", active: true },
-  { id: "members-home-and-auto", name: "Members Home and Auto", active: true },
-  { id: "men-of-the-sacred-hearts", name: "Men of the Sacred Hearts", active: true },
-  { id: "saxon-incorporated", name: "Saxon Incorporated", active: true },
-  { id: "prestige-auto-body", name: "Prestige Auto Body", active: true },
-  { id: "general-motors", name: "General Motors", active: true },
-  { id: "office-express", name: "Office Express", active: true },
-  { id: "4-your-benefit", name: "4 Your Benefit", active: true },
-  { id: "wealth-management-institute", name: "Wealth Management Institute", active: true },
-  { id: "purple-power", name: "Purple Power", active: true },
-  { id: "hershey-insurance-agency", name: "Hershey Insurance Agency", active: true },
-  { id: "rock-harbor", name: "Rock Harbor", active: true },
-  { id: "victory-real-estate-investments", name: "Victory Real Estate Investments", active: true },
-  { id: "padilla-law-group", name: "Padilla Law Group", active: true },
-  { id: "c-e-gleeson-construction", name: "C.E. Gleeson Construction", active: true },
-  { id: "apex-laboratory-equipment", name: "APEX Laboratory Equipment", active: true },
-  { id: "fougnie-professional-lawn-maintenance", name: "Fougnie Professional Lawn Maintenance", active: true },
-  { id: "champu-auto-spa", name: "Champu Auto Spa", active: true },
-  { id: "air-wizards-hvac", name: "Air Wizards HVAC", active: true },
-  { id: "north-american-industrial-supply", name: "North American Industrial Supply", active: true },
-  { id: "blessed-pest-solutions", name: "Blessed Pest Solutions", active: true },
-  { id: "dentapup", name: "Dentapup", active: true },
-  { id: "rogow-property-management", name: "Rogow Property Management", active: true },
-  { id: "jmrh-group-dock-and-door", name: "JMRH Group Dock and Door", active: true },
-  { id: "everyday-process-counseling-center", name: "Everyday Process Counseling Center", active: true },
-  { id: "a-a-pro-paint", name: "A&A Pro Paint", active: true },
-  { id: "construction-clean", name: "Construction Clean", active: true },
-  { id: "great-lakes-maintenance", name: "Great Lakes Maintenance", active: true },
-  { id: "masonry-cleaning-solutions", name: "Masonry Cleaning Solutions", active: true },
-  { id: "phoenix-contractors", name: "Phoenix Contractors", active: true },
-  { id: "concierge-flooring", name: "Concierge Flooring", active: true },
-  { id: "certified-flooring-installation", name: "Certified Flooring Installation", active: true },
-  { id: "roof-shampoo", name: "Roof Shampoo", active: true },
-  { id: "perfecting-lifestyles", name: "Perfecting Lifestyles", active: true },
-];
-
-/* Team as listed on the S4 Connect site. Hourly cost starts at zero and has to be
-   filled in under Setup before any labor or profitability number means anything. */
-const DEFAULT_EMPLOYEES = [
-  { id: "lance-docken", name: "Lance Docken", role: "Co-founder, CEO", rate: 0 },
-  { id: "dan-woodford", name: "Dan Woodford", role: "Co-founder, Chief Marketing Officer", rate: 0 },
-  { id: "phil-foster", name: "Phil Foster", role: "Creative Director", rate: 0 },
-  { id: "tammy-migliore", name: "Tammy Migliore", role: "SVP, Information Technology", rate: 0 },
-  { id: "mo-hamid", name: "Mo Hamid", role: "Managing Director of Strategic Growth", rate: 0 },
-  { id: "bella-crociata", name: "Bella Crociata", role: "Marketing Operations Manager", rate: 0 },
-  { id: "dan-blondin", name: "Dan Blondin", role: "Business Development Manager", rate: 0 },
-  { id: "maria-eusebio", name: "Maria Eusebio", role: "Marketing Specialist", rate: 0 },
-  { id: "mary-blondin", name: "Mary Blondin", role: "Accounting Specialist", rate: 0 },
-  { id: "mitchell-woodford", name: "Mitchell Woodford", role: "Marketing Intern", rate: 0 },
-];
-
-const isBillable = (s) => typeof s === "string" && s.startsWith("COS-");
-
-/* S4 Connect mark, vector traced from the supplied logo artwork.
-   The CONNECT wordmark is dropped because it stops being legible below about 60px tall,
-   so the brand name is set in type beside the mark instead. */
-const S4_MARK = {
-  viewBox: "0 0 1920 1593",
-  transform: "translate(-0.236616,1593.855576) scale(0.100000,-0.100000)",
-  d: "M15070 15929 c-1278 -62 -3258 -317 -5160 -665 -236 -43 -961 -186 -1105 -218 -38 -8 -124 -27 -190 -41 -213 -47 -573 -134 -764 -184 -102 -28 -474 -122 -826 -211 -352 -89 -701 -177 -775 -196 -2537 -662 -3942 -1179 -4376 -1609 -99 -98 -129 -148 -144 -241 -24 -142 29 -229 164 -270 157 -47 332 -67 606 -68 267 -1 344 2 655 29 388 34 1007 116 1500 200 568 96 1365 198 2000 255 127 11 250 22 275 25 48 5 573 40 730 49 863 49 1833 22 2550 -69 1328 -170 2261 -584 2680 -1191 55 -80 142 -243 135 -255 -3 -3 -31 -9 -64 -13 -71 -8 -362 -63 -556 -105 -1138 -245 -2840 -766 -3931 -1201 -2241 -896 -4391 -2182 -6256 -3742 -852 -714 -1443 -1355 -1807 -1962 -741 -1233 -465 -2081 749 -2300 410 -74 1062 -71 1625 9 827 116 1695 385 2670 827 1902 863 4122 2426 5741 4043 581 580 1006 1088 1393 1664 630 939 871 1697 787 2476 -7 66 -10 123 -7 127 13 14 656 114 1021 158 332 40 966 97 975 88 8 -8 -296 -342 -499 -548 -272 -276 -532 -558 -522 -567 6 -6 443 353 566 466 58 53 234 224 393 381 l288 284 262 8 c1151 32 1958 -121 2478 -471 350 -235 548 -532 552 -828 2 -109 3 -114 30 -140 39 -40 123 -38 204 3 75 38 85 59 79 157 -18 270 -261 651 -554 872 -206 155 -409 245 -722 319 -569 136 -1187 210 -1872 224 l-316 7 128 137 c1051 1124 1782 2104 1995 2673 119 320 134 570 45 792 -181 452 -798 726 -1840 818 -189 16 -692 18 -990 4z m770 -243 c825 -92 1300 -377 1464 -877 64 -197 70 -335 22 -534 -127 -524 -682 -1399 -1585 -2499 -108 -131 -203 -247 -212 -258 -14 -18 -34 -20 -255 -29 -131 -4 -266 -11 -299 -14 -33 -3 -141 -12 -241 -20 -232 -19 -484 -48 -749 -85 -198 -29 -602 -95 -635 -105 -12 -4 -23 17 -45 87 -158 498 -613 891 -1446 1249 -829 356 -2236 545 -4474 600 -411 10 -2175 6 -2335 -6 -98 -7 -465 -16 -460 -12 20 20 542 191 1080 354 1851 561 4189 1188 6200 1663 1317 311 2098 440 3050 504 146 10 783 -3 920 -18z m-2826 -4697 c24 -120 -6 -350 -69 -534 -545 -1596 -3888 -4673 -7050 -6487 -2519 -1446 -4356 -1797 -5126 -981 -109 115 -135 195 -126 388 26 600 683 1576 1702 2528 841 786 2376 1875 3765 2672 2234 1282 4438 2070 6805 2433 93 15 92 15 99 -19z M13525 9793 c-11 -64 -120 -382 -170 -498 -391 -914 -1228 -1997 -2345 -3035 -1717 -1595 -3807 -2999 -5610 -3768 -799 -340 -1595 -582 -2250 -684 -71 -11 778 -13 5147 -16 l5233 -2 2 -893 3 -892 1170 0 1170 0 3 892 2 893 605 0 605 0 0 1045 0 1045 -605 0 -605 0 0 2975 0 2975 -1174 0 -1174 0 -7 -37z m5 -4398 l0 -1515 -1285 0 c-707 0 -1285 2 -1285 5 0 8 2560 3025 2567 3025 2 0 3 -682 3 -1515z",
-};
-
-const S4Mark = ({ height = 46, color = "#FFFFFF" }) => (
-  <svg
-    viewBox={S4_MARK.viewBox}
-    role="img"
-    aria-label="S4 Connect"
-    style={{ height, width: "auto", color, display: "block" }}
-  >
-    <g transform={S4_MARK.transform} fill="currentColor" stroke="none">
-      <path d={S4_MARK.d} />
-    </g>
-  </svg>
-);
-
-/* ---------- storage ---------- */
-
-const LOCAL_PREFIX = "s4tt.local.";
-const SYNC_URL_KEY = "s4tt.sync.url";
-
-const mem = {};
-
-const ls = {
-  get(k) {
-    try {
-      const v = window.localStorage.getItem(LOCAL_PREFIX + k);
-      return v == null ? null : JSON.parse(v);
-    } catch {
-      return mem[k] ?? null;
-    }
-  },
-  set(k, v) {
-    try {
-      window.localStorage.setItem(LOCAL_PREFIX + k, JSON.stringify(v));
-      return true;
-    } catch {
-      mem[k] = v;
-      return true;
-    }
-  },
-  keys(prefix) {
-    try {
-      const out = [];
-      for (let i = 0; i < window.localStorage.length; i++) {
-        const k = window.localStorage.key(i);
-        if (k && k.startsWith(LOCAL_PREFIX + prefix)) out.push(k.slice(LOCAL_PREFIX.length));
-      }
-      return out;
-    } catch {
-      return Object.keys(mem).filter((k) => k.startsWith(prefix));
-    }
-  },
-};
-
-/* Two ways to run.
-   Local only: everything sits in this browser, which is fine for one person or a trial.
-   Synced: point the app at a Google Apps Script endpoint and the whole team shares one book.
-   Either way a local copy is always written, so a sync outage never costs anyone their week. */
-const S = {
-  mode: "local",
-  url: "",
-  online: true,
-  onStatus: null,
-
-  setUrl(url) {
-    this.url = (url || "").trim();
-    this.mode = this.url ? "remote" : "local";
-    this.online = true;
-    try {
-      if (this.url) window.localStorage.setItem(SYNC_URL_KEY, this.url);
-      else window.localStorage.removeItem(SYNC_URL_KEY);
-    } catch {}
-  },
-
-  loadUrl() {
-    try {
-      const u = window.localStorage.getItem(SYNC_URL_KEY);
-      if (u) this.setUrl(u);
-    } catch {}
-    return this.url;
-  },
-
-  async call(action, payload) {
-    const res = await fetch(this.url, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action, ...payload }),
-    });
-    if (!res.ok) throw new Error("Sync endpoint returned " + res.status);
-    const json = await res.json();
-    if (json.error) throw new Error(json.error);
-    return json;
-  },
-
-  flag(ok, err) {
-    if (this.online !== ok) {
-      this.online = ok;
-      if (this.onStatus) this.onStatus(ok, err);
-    } else if (!ok && this.onStatus) {
-      this.onStatus(ok, err);
-    }
-  },
-
-  async ping(url) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action: "ping" }),
-    });
-    if (!res.ok) throw new Error("Endpoint returned " + res.status);
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "Endpoint did not answer as expected");
-    return true;
-  },
-
-  async get(key) {
-    if (this.mode === "remote") {
-      try {
-        const r = await this.call("get", { key });
-        this.flag(true);
-        const val = r.value == null ? null : JSON.parse(r.value);
-        if (val !== null) ls.set(key, val);
-        return val;
-      } catch (e) {
-        this.flag(false, e.message);
-      }
-    }
-    return ls.get(key);
-  },
-
-  async set(key, value) {
-    ls.set(key, value);
-    if (this.mode === "remote") {
-      try {
-        await this.call("set", { key, value: JSON.stringify(value) });
-        this.flag(true);
-        return true;
-      } catch (e) {
-        this.flag(false, e.message);
-        return false;
-      }
-    }
-    return true;
-  },
-
-  async list(prefix) {
-    if (this.mode === "remote") {
-      try {
-        const r = await this.call("list", { prefix });
-        this.flag(true);
-        return r.keys || [];
-      } catch (e) {
-        this.flag(false, e.message);
-      }
-    }
-    return ls.keys(prefix);
-  },
-
-  async getPersonal(key) {
-    return ls.get("personal." + key);
-  },
-
-  async setPersonal(key, value) {
-    return ls.set("personal." + key, value);
-  },
-};
-
-/* ---------- helpers ---------- */
-
-const uid = () => Math.random().toString(36).slice(2, 10);
-const pad = (n) => String(n).padStart(2, "0");
-const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const ymOf = (dateStr) => dateStr.slice(0, 7);
-const todayISO = () => iso(new Date());
-
-const parseISO = (s) => {
-  const [y, m, d] = s.split("-").map(Number);
-  return new Date(y, m - 1, d);
-};
-
-const mondayOf = (dateStr) => {
-  const d = parseISO(dateStr);
-  const shift = (d.getDay() + 6) % 7;
-  d.setDate(d.getDate() - shift);
-  return iso(d);
-};
-
-const addDays = (dateStr, n) => {
-  const d = parseISO(dateStr);
-  d.setDate(d.getDate() + n);
-  return iso(d);
-};
-
-const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-const monthLabel = (ym) => {
-  const [y, m] = ym.split("-").map(Number);
-  return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "short", year: "numeric" });
-};
-
-const num = (n, dp = 0) =>
-  (Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
-
-const money = (n) => {
-  const v = Number(n) || 0;
-  const s = Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-  return (v < 0 ? "-$" : "$") + s;
-};
-
-const hrs = (n) => (Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 2 });
-
-const clean = (s) => String(s ?? "").trim();
-const norm = (s) => clean(s).toLowerCase().replace(/[^a-z0-9]/g, "");
-
-function pickCol(row, candidates) {
-  const keys = Object.keys(row);
-  for (const cand of candidates) {
-    const hit = keys.find((k) => norm(k) === norm(cand));
-    if (hit) return row[hit];
-  }
-  for (const cand of candidates) {
-    const hit = keys.find((k) => norm(k).includes(norm(cand)));
-    if (hit) return row[hit];
-  }
-  return "";
-}
-
-const toNumber = (v) => {
-  const n = parseFloat(String(v ?? "").replace(/[$,()\s]/g, ""));
-  if (isNaN(n)) return 0;
-  return /^\s*\(/.test(String(v)) ? -n : n;
-};
-
-function downloadCSV(filename, rows) {
-  const csv = Papa.unparse(rows);
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-/* ---------- small UI pieces ---------- */
-
-const Label = ({ children }) => (
-  <div className="text-xs uppercase tracking-widest mb-1" style={{ color: BRAND.slate }}>
-    {children}
-  </div>
-);
-
-const Card = ({ title, note, right, children }) => (
-  <section className="mb-6 border" style={{ borderColor: BRAND.line, background: BRAND.paper }}>
-    {(title || right) && (
-      <header
-        className="flex items-baseline justify-between gap-4 px-4 py-3 border-b"
-        style={{ borderColor: BRAND.line }}
-      >
-        <div>
-          <h2 className="text-sm font-semibold tracking-wide" style={{ color: BRAND.navy }}>
-            {title}
-          </h2>
-          {note && (
-            <p className="text-xs mt-1" style={{ color: BRAND.slate }}>
-              {note}
-            </p>
-          )}
-        </div>
-        <div className="flex items-center gap-2 shrink-0">{right}</div>
-      </header>
-    )}
-    <div className="p-4">{children}</div>
-  </section>
-);
-
-const Btn = ({ kind = "ghost", onClick, children, disabled, title }) => {
-  const base = "text-xs px-3 py-2 border transition-colors";
-  const styles =
-    kind === "solid"
-      ? { background: BRAND.navy, color: "#fff", borderColor: BRAND.navy }
-      : kind === "teal"
-      ? { background: BRAND.teal, color: "#fff", borderColor: BRAND.teal }
-      : kind === "danger"
-      ? { background: "#fff", color: BRAND.red, borderColor: BRAND.line }
-      : { background: "#fff", color: BRAND.navy, borderColor: BRAND.line };
-  return (
-    <button
-      type="button"
-      title={title}
-      onClick={onClick}
-      disabled={disabled}
-      className={base}
-      style={{ ...styles, opacity: disabled ? 0.45 : 1 }}
-    >
-      {children}
-    </button>
-  );
-};
-
-const Field = ({ value, onChange, type = "text", placeholder, mono, width, step }) => (
-  <input
-    type={type}
-    step={step}
-    value={value}
-    placeholder={placeholder}
-    onChange={(e) => onChange(e.target.value)}
-    className={`px-2 py-1 border text-sm ${mono ? "font-mono text-right" : ""}`}
-    style={{ borderColor: BRAND.line, color: BRAND.navy, width: width || "100%" }}
-  />
-);
-
-const Select = ({ value, onChange, options, placeholder, width }) => (
-  <select
-    value={value}
-    onChange={(e) => onChange(e.target.value)}
-    className="px-2 py-1 border text-sm bg-white"
-    style={{ borderColor: BRAND.line, color: BRAND.navy, width: width || "100%" }}
-  >
-    {placeholder && <option value="">{placeholder}</option>}
-    {options.map((o) => (
-      <option key={o.value ?? o} value={o.value ?? o}>
-        {o.label ?? o}
-      </option>
-    ))}
-  </select>
-);
-
-const Th = ({ children, align = "left", w }) => (
-  <th
-    className="px-3 py-2 text-xs font-semibold uppercase tracking-wider border-b"
-    style={{ color: BRAND.slate, borderColor: BRAND.line, textAlign: align, width: w }}
-  >
-    {children}
-  </th>
-);
-
-const Td = ({ children, align = "left", mono, strong }) => (
-  <td
-    className={`px-3 py-2 text-sm border-b ${mono ? "font-mono" : ""} ${strong ? "font-semibold" : ""}`}
-    style={{ borderColor: BRAND.line, color: BRAND.navy, textAlign: align }}
-  >
-    {children}
-  </td>
-);
-
-const Bar = ({ pct, color }) => (
-  <div className="h-1" style={{ background: BRAND.line }}>
-    <div className="h-1" style={{ width: `${Math.max(0, Math.min(100, pct))}%`, background: color }} />
-  </div>
-);
-
-/* ---------- csv drop ---------- */
-
-function CsvInput({ label, onRows }) {
-  const ref = useRef(null);
-  const [paste, setPaste] = useState("");
-  const handleFile = (file) => {
-    if (!file) return;
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (res) => onRows(res.data),
-    });
-  };
-  const handlePaste = () => {
-    if (!paste.trim()) return;
-    const res = Papa.parse(paste.trim(), { header: true, skipEmptyLines: true });
-    onRows(res.data);
-    setPaste("");
-  };
-  return (
-    <div className="border p-3" style={{ borderColor: BRAND.line, background: BRAND.wash }}>
-      <Label>{label}</Label>
-      <div className="flex flex-wrap items-center gap-2 mb-2">
-        <input
-          ref={ref}
-          type="file"
-          accept=".csv,text/csv"
-          onChange={(e) => handleFile(e.target.files?.[0])}
-          className="text-xs"
-          style={{ color: BRAND.slate }}
-        />
-      </div>
-      <textarea
-        value={paste}
-        onChange={(e) => setPaste(e.target.value)}
-        placeholder="or paste rows straight out of Excel, including the header row"
-        rows={3}
-        className="w-full px-2 py-1 border text-xs font-mono"
-        style={{ borderColor: BRAND.line, color: BRAND.navy }}
-      />
-      <div className="mt-2">
-        <Btn onClick={handlePaste} disabled={!paste.trim()}>
-          Load pasted rows
-        </Btn>
-      </div>
-    </div>
-  );
-}
+import {
+  BRAND,
+  PREFIX,
+  CONFIG_KEY,
+  ME_KEY,
+  entriesKey,
+  financeKey,
+  DEFAULT_SERVICES,
+  DEFAULT_CLIENTS,
+  DEFAULT_EMPLOYEES,
+  DEFAULT_CAPABILITY_MAP,
+  DEFAULT_INDUSTRIES,
+  ROLES,
+  isBillable,
+} from "./lib/constants";
+import {
+  uid,
+  ymOf,
+  todayISO,
+  parseISO,
+  mondayOf,
+  addDays,
+  DAY_LABELS,
+  monthLabel,
+  num,
+  money,
+  hrs,
+  clean,
+  norm,
+  pickCol,
+  toNumber,
+  downloadCSV,
+} from "./lib/helpers";
+import { S } from "./lib/storage";
+import { canSeeTab, landingTab, isAdminLevel } from "./lib/roles";
+import { buildDemoBook } from "./lib/demoData";
+import { S4Mark, Label, Card, Btn, Field, Select, Th, Td, Bar, Stat, CsvInput, Pill } from "./components/ui";
+import { RankedBarChart } from "./components/charts";
+import SignIn from "./features/SignIn";
 
 /* ================= app ================= */
 
@@ -533,6 +53,7 @@ function App() {
   const [status, setStatus] = useState("");
   const [sync, setSync] = useState({ url: "", online: true, error: "" });
   const [busy, setBusy] = useState(false);
+  const [demo, setDemo] = useState(false);
 
   const flash = (msg) => {
     setStatus(msg);
@@ -548,9 +69,19 @@ function App() {
           employees: c.employees?.length ? c.employees : DEFAULT_EMPLOYEES,
           clients: c.clients?.length ? c.clients : DEFAULT_CLIENTS,
           services: c.services?.length ? c.services : DEFAULT_SERVICES,
+          projects: c.projects || [],
+          capabilityMap: c.capabilityMap || DEFAULT_CAPABILITY_MAP,
+          industries: c.industries?.length ? c.industries : DEFAULT_INDUSTRIES,
         });
       } else {
-        const seeded = { employees: DEFAULT_EMPLOYEES, clients: DEFAULT_CLIENTS, services: DEFAULT_SERVICES };
+        const seeded = {
+          employees: DEFAULT_EMPLOYEES,
+          clients: DEFAULT_CLIENTS,
+          services: DEFAULT_SERVICES,
+          projects: [],
+          capabilityMap: DEFAULT_CAPABILITY_MAP,
+          industries: DEFAULT_INDUSTRIES,
+        };
         setCfg(seeded);
         await S.set(CONFIG_KEY, seeded);
       }
@@ -617,6 +148,7 @@ function App() {
   const saveCfg = async (next) => {
     setCfg(next);
     const ok = await S.set(CONFIG_KEY, next);
+    S.log("activity", { actor: me, action: "config_saved" });
     flash(ok ? "Saved" : "Saved on this device only, the shared book is unreachable");
   };
 
@@ -636,12 +168,31 @@ function App() {
   const saveFinance = async (ym, rows) => {
     setFinance((prev) => ({ ...prev, [ym]: rows }));
     const ok = await S.set(financeKey(ym), rows);
+    S.log("activity", { actor: me, action: "finance_imported", month: ym, rows: rows.length });
     flash(ok ? "Saved" : "Saved on this device only, the shared book is unreachable");
   };
 
   const pickMe = async (empId) => {
     setMe(empId);
     await S.setPersonal(ME_KEY, { emp: empId });
+    S.log("activity", { actor: empId, action: "signed_in" });
+  };
+
+  const signOut = async () => {
+    setMe("");
+    setDemo(false);
+    await S.setPersonal(ME_KEY, { emp: "" });
+    setTab("entry");
+  };
+
+  const enterDemo = () => {
+    const book = buildDemoBook();
+    setCfg(book.cfg);
+    setEntries(book.entries);
+    setFinance(book.finance);
+    setDemo(true);
+    setMe(book.cfg.employees[0].id);
+    setTab(landingTab(book.cfg.employees[0]));
   };
 
   const allEntries = useMemo(() => Object.values(entries).flat(), [entries]);
@@ -650,11 +201,17 @@ function App() {
   const empName = (id) => empById[id]?.name || "Unassigned";
   const clientName = (id) => clientById[id]?.name || "Unassigned";
   const rateOf = (id) => Number(empById[id]?.rate) || 0;
+  const meRecord = empById[me] || null;
 
   const months = useMemo(() => {
     const set = new Set([...Object.keys(entries), ...Object.keys(finance), todayISO().slice(0, 7)]);
     return [...set].filter(Boolean).sort();
   }, [entries, finance]);
+
+  useEffect(() => {
+    if (me && !canSeeTab(meRecord, tab)) setTab(landingTab(meRecord));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me]);
 
   if (!ready) {
     return (
@@ -664,18 +221,31 @@ function App() {
     );
   }
 
+  if (!me) {
+    return <SignIn cfg={cfg} onSignIn={pickMe} onDemo={enterDemo} />;
+  }
+
   const noClients = cfg.clients.length === 0;
   const noRate = cfg.employees.filter((e) => !Number(e.rate)).length;
 
-  const TABS = [
+  const ALL_TABS = [
     ["entry", "Enter time"],
     ["reports", "Hours reports"],
     ["profit", "Profitability"],
     ["setup", "Setup"],
   ];
+  const TABS = ALL_TABS.filter(([k]) => canSeeTab(meRecord, k));
 
   return (
     <div className="min-h-screen" style={{ background: BRAND.wash, color: BRAND.navy }}>
+      {demo && (
+        <div className="text-center text-xs py-1.5 font-medium" style={{ background: BRAND.amber, color: "#fff" }}>
+          You're viewing sample data. Nothing here is saved.{" "}
+          <button className="underline ml-1" onClick={signOut}>
+            Exit demo
+          </button>
+        </div>
+      )}
       <header style={{ background: BRAND.navy }}>
         <div className="max-w-6xl mx-auto px-5 py-4 flex items-center justify-between gap-6 flex-wrap">
           <div className="flex items-center gap-4">
@@ -687,50 +257,45 @@ function App() {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             {status && (
               <span className="text-xs" style={{ color: "#9AA6BF" }}>
                 {status}
               </span>
             )}
-            <button
-              onClick={loadAll}
-              className="text-xs px-2 py-1 border"
-              style={{
-                borderColor: sync.url && !sync.online ? BRAND.amber : "#3A4560",
-                color: sync.url && !sync.online ? BRAND.amber : "#9AA6BF",
-                background: "transparent",
-              }}
-              title={sync.url ? sync.error || "Shared book, click to refresh" : "This browser only, set up sync under Setup"}
-            >
-              {busy ? "Working" : !sync.url ? "This browser only" : sync.online ? "Shared, refresh" : "Sync offline"}
-            </button>
-            <div>
-              <div className="uppercase tracking-widest mb-1" style={{ color: "#9AA6BF", fontSize: 10 }}>
-                Entering time as
-              </div>
-              <select
-                value={me}
-                onChange={(e) => pickMe(e.target.value)}
-                className="px-2 py-1 text-sm border bg-white"
-                style={{ borderColor: "#3A4560", color: BRAND.navy, minWidth: 180 }}
+            {!demo && (
+              <button
+                onClick={loadAll}
+                className="text-xs px-2 py-1 border"
+                style={{
+                  borderColor: sync.url && !sync.online ? BRAND.amber : "#3A4560",
+                  color: sync.url && !sync.online ? BRAND.amber : "#9AA6BF",
+                  background: "transparent",
+                }}
+                title={sync.url ? sync.error || "Shared book, click to refresh" : "This browser only, set up sync under Setup"}
               >
-                <option value="">Pick your name</option>
-                {cfg.employees.map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.name}
-                  </option>
-                ))}
-              </select>
+                {busy ? "Working" : !sync.url ? "This browser only" : sync.online ? "Shared, refresh" : "Sync offline"}
+              </button>
+            )}
+            <div className="text-right">
+              <div className="uppercase tracking-widest mb-1" style={{ color: "#9AA6BF", fontSize: 10 }}>
+                Signed in as
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-white font-medium">{empName(me)}</span>
+                <button onClick={signOut} className="text-xs underline" style={{ color: "#9AA6BF" }}>
+                  Sign out
+                </button>
+              </div>
             </div>
           </div>
         </div>
-        <nav className="max-w-6xl mx-auto px-5 flex gap-1">
+        <nav className="max-w-6xl mx-auto px-5 flex gap-1 flex-wrap">
           {TABS.map(([k, lbl]) => (
             <button
               key={k}
               onClick={() => setTab(k)}
-              className="px-4 py-2 text-xs uppercase tracking-widest"
+              className="px-4 py-2 text-xs uppercase tracking-widest whitespace-nowrap"
               style={{
                 color: tab === k ? "#fff" : "#9AA6BF",
                 borderBottom: `2px solid ${tab === k ? BRAND.teal : "transparent"}`,
@@ -765,23 +330,10 @@ function App() {
         )}
 
         {tab === "entry" && (
-          <EnterTime
-            cfg={cfg}
-            me={me}
-            entries={entries}
-            saveMonth={saveMonth}
-            clientById={clientById}
-          />
+          <EnterTime cfg={cfg} me={me} entries={entries} saveMonth={saveMonth} clientById={clientById} />
         )}
         {tab === "reports" && (
-          <Reports
-            cfg={cfg}
-            allEntries={allEntries}
-            months={months}
-            empName={empName}
-            clientName={clientName}
-            rateOf={rateOf}
-          />
+          <Reports cfg={cfg} allEntries={allEntries} months={months} empName={empName} clientName={clientName} rateOf={rateOf} />
         )}
         {tab === "profit" && (
           <Profitability
@@ -793,6 +345,7 @@ function App() {
             clientById={clientById}
             clientName={clientName}
             rateOf={rateOf}
+            meRecord={meRecord}
           />
         )}
         {tab === "setup" && (
@@ -812,7 +365,7 @@ function App() {
 
       <footer className="max-w-6xl mx-auto px-5 pb-10 pt-2">
         <p className="text-xs" style={{ color: BRAND.slate }}>
-          S4 Connect internal tool. Everyone with the link shares one set of data and can see every entry.
+          S4 Connect internal tool. What you can see here depends on your role.
         </p>
       </footer>
     </div>
@@ -881,16 +434,7 @@ function EnterTime({ cfg, me, entries, saveMonth, clientById }) {
     weekEntries.filter((e) => e.client === client && e.svc === svc).reduce((s, e) => s + Number(e.hours || 0), 0);
   const weekTotal = weekEntries.reduce((s, e) => s + Number(e.hours || 0), 0);
 
-  if (!me) {
-    return (
-      <Card title="Pick your name to start" note="Your choice is remembered on this device, so you only do it once.">
-        <p className="text-sm" style={{ color: BRAND.slate }}>
-          Use the selector at the top right. Everyone uses the same link, and the name you pick decides whose timesheet
-          you are filling in.
-        </p>
-      </Card>
-    );
-  }
+  if (!me) return null;
 
   return (
     <>
@@ -982,12 +526,7 @@ function EnterTime({ cfg, me, entries, saveMonth, clientById }) {
           </div>
           <div style={{ width: 260 }}>
             <Label>Service type</Label>
-            <Select
-              value={newService}
-              onChange={setNewService}
-              placeholder="Select service type"
-              options={cfg.services}
-            />
+            <Select value={newService} onChange={setNewService} placeholder="Select service type" options={cfg.services} />
           </div>
           <Btn kind="solid" onClick={addLine} disabled={!newClient || !newService}>
             Add line
@@ -1201,6 +740,15 @@ function Reports({ cfg, allEntries, months, empName, clientName, rateOf }) {
           />
         </div>
 
+        {rows.length > 0 && split === "none" && (
+          <div className="mb-6 pb-6 border-b" style={{ borderColor: BRAND.line }}>
+            <div className="text-xs font-semibold mb-3" style={{ color: BRAND.navy }}>
+              Hours by {group === "person" ? "person" : group === "client" ? "client" : group === "service" ? "service type" : "month"}
+            </div>
+            <RankedBarChart data={rows.slice(0, 12)} labelKey="key" valueKey="hours" valueFmt={hrs} />
+          </div>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full border-collapse">
             <thead>
@@ -1248,26 +796,21 @@ function Reports({ cfg, allEntries, months, empName, clientName, rateOf }) {
   );
 }
 
-const Stat = ({ label, value, color }) => (
-  <div>
-    <div className="text-xs uppercase tracking-widest" style={{ color: BRAND.slate }}>
-      {label}
-    </div>
-    <div className="text-2xl font-mono font-semibold" style={{ color: color || BRAND.navy }}>
-      {value}
-    </div>
-  </div>
-);
-
 /* ================= profitability ================= */
 
-function Profitability({ cfg, entries, finance, months, saveFinance, clientById, clientName, rateOf }) {
+function Profitability({ cfg, entries, finance, months, saveFinance, clientById, clientName, rateOf, meRecord }) {
   const thisMonth = todayISO().slice(0, 7);
   const [ym, setYm] = useState(months.includes(thisMonth) ? thisMonth : months[months.length - 1] || thisMonth);
   const [view, setView] = useState("client");
 
-  const finRows = finance[ym] || [];
-  const monthEntries = entries[ym] || [];
+  const scopedClientIds = isAdminLevel(meRecord?.accessLevel) ? null : meRecord?.managedClients || [];
+  const inScope = (clientId) => scopedClientIds === null || scopedClientIds.includes(clientId);
+
+  const finRows = (finance[ym] || []).filter((f) => {
+    const hit = cfg.clients.find((c) => norm(c.name) === norm(f.client));
+    return !hit || inScope(hit.id);
+  });
+  const monthEntries = (entries[ym] || []).filter((e) => inScope(e.client));
 
   const importFinance = (raw) => {
     const rows = raw
@@ -1362,38 +905,46 @@ function Profitability({ cfg, entries, finance, months, saveFinance, clientById,
   );
   const internalCost = internal.reduce((s, r) => s + r.cost, 0);
   const unmatched = finRows.filter((f) => !matchClientId(f.client));
+  const canImport = isAdminLevel(meRecord?.accessLevel);
 
   return (
     <>
-      <Card
-        title="Monthly revenue and cost import"
-        note="One row per client and service type. Columns can be named loosely, the import looks for client, service type, revenue and COGS."
-        right={
-          <div style={{ width: 170 }}>
-            <Select value={ym} onChange={setYm} options={months.map((m) => ({ value: m, label: monthLabel(m) }))} />
-          </div>
-        }
-      >
-        <CsvInput label={`Load the ${monthLabel(ym)} file`} onRows={importFinance} />
-        {finRows.length > 0 && (
-          <p className="text-sm mt-3" style={{ color: BRAND.slate }}>
-            {num(finRows.length)} rows loaded for {monthLabel(ym)}, {money(finRows.reduce((s, f) => s + f.revenue, 0))} of
-            revenue. Loading again replaces the month.
-          </p>
-        )}
-        {unmatched.length > 0 && (
-          <div className="mt-3 border-l-4 p-3" style={{ borderColor: BRAND.amber, background: "#FFF8EC" }}>
-            <div className="text-sm font-semibold">
-              {num(unmatched.length)} rows have a client name that does not match the client list
+      {canImport && (
+        <Card
+          title="Monthly revenue and cost import"
+          note="One row per client and service type. Columns can be named loosely, the import looks for client, service type, revenue and COGS."
+          right={
+            <div style={{ width: 170 }}>
+              <Select value={ym} onChange={setYm} options={months.map((m) => ({ value: m, label: monthLabel(m) }))} />
             </div>
-            <p className="text-xs mt-1" style={{ color: BRAND.slate }}>
-              Revenue still counts, but no time can be attached to it. Names in question:{" "}
-              {[...new Set(unmatched.map((u) => u.client))].slice(0, 8).join(", ")}. Fix the spelling in the file or add
-              the client in Setup.
+          }
+        >
+          <CsvInput label={`Load the ${monthLabel(ym)} file`} onRows={importFinance} />
+          {finRows.length > 0 && (
+            <p className="text-sm mt-3" style={{ color: BRAND.slate }}>
+              {num(finRows.length)} rows loaded for {monthLabel(ym)}, {money(finRows.reduce((s, f) => s + f.revenue, 0))} of
+              revenue. Loading again replaces the month.
             </p>
-          </div>
-        )}
-      </Card>
+          )}
+          {unmatched.length > 0 && (
+            <div className="mt-3 border-l-4 p-3" style={{ borderColor: BRAND.amber, background: "#FFF8EC" }}>
+              <div className="text-sm font-semibold">
+                {num(unmatched.length)} rows have a client name that does not match the client list
+              </div>
+              <p className="text-xs mt-1" style={{ color: BRAND.slate }}>
+                Revenue still counts, but no time can be attached to it. Names in question:{" "}
+                {[...new Set(unmatched.map((u) => u.client))].slice(0, 8).join(", ")}. Fix the spelling in the file or add
+                the client in Setup.
+              </p>
+            </div>
+          )}
+        </Card>
+      )}
+      {!canImport && (
+        <div className="mb-6">
+          <Select value={ym} onChange={setYm} options={months.map((m) => ({ value: m, label: monthLabel(m) }))} width={170} />
+        </div>
+      )}
 
       <Card
         title={`Profitability, ${monthLabel(ym)}`}
@@ -1439,6 +990,15 @@ function Profitability({ cfg, entries, finance, months, saveFinance, clientById,
             color={totals.gp < 0 ? BRAND.red : BRAND.navy}
           />
         </div>
+
+        {lines.length > 0 && (
+          <div className="mb-6 pb-6 border-b" style={{ borderColor: BRAND.line }}>
+            <div className="text-xs font-semibold mb-3" style={{ color: BRAND.navy }}>
+              Gross profit by {view === "client" ? "client" : "service type"}
+            </div>
+            <RankedBarChart data={lines.slice(0, 12)} labelKey="key" valueKey="gp" />
+          </div>
+        )}
 
         <div className="overflow-x-auto">
           <table className="w-full border-collapse">
@@ -1560,7 +1120,7 @@ function Profitability({ cfg, entries, finance, months, saveFinance, clientById,
 function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, connectSync, pushLocalToSync, busy }) {
   const [syncUrl, setSyncUrl] = useState(sync.url);
   const [syncMsg, setSyncMsg] = useState("");
-  const [newEmp, setNewEmp] = useState({ name: "", role: "", rate: "" });
+  const [newEmp, setNewEmp] = useState({ name: "", role: "", rate: "", email: "" });
   const [newClient, setNewClient] = useState("");
   const [newSvc, setNewSvc] = useState("");
 
@@ -1573,6 +1133,7 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, connectSync, 
         name: clean(pickCol(r, ["name", "employee", "employee name", "person"])),
         role: clean(pickCol(r, ["role", "title", "position"])),
         rate: toNumber(pickCol(r, ["rate", "hourly", "hourly cost", "cost", "hourly expense", "expense"])),
+        email: clean(pickCol(r, ["email", "email address"])),
       }))
       .filter((r) => r.name);
     const next = cfg.employees.map((e) => ({ ...e }));
@@ -1581,7 +1142,8 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, connectSync, 
       if (hit) {
         hit.rate = p.rate || hit.rate;
         hit.role = p.role || hit.role;
-      } else next.push({ id: uid(), name: p.name, role: p.role, rate: p.rate });
+        hit.email = p.email || hit.email;
+      } else next.push({ id: uid(), name: p.name, role: p.role, rate: p.rate, email: p.email, accessLevel: ROLES.CONTRIBUTOR, managedClients: [] });
     });
     saveCfg({ ...cfg, employees: next });
   };
@@ -1597,6 +1159,13 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, connectSync, 
     saveCfg({ ...cfg, clients: next });
   };
 
+  const ROLE_OPTIONS = [
+    { value: ROLES.CONTRIBUTOR, label: "Contributor" },
+    { value: ROLES.ACCOUNT_MANAGER, label: "Account Manager" },
+    { value: ROLES.ADMIN, label: "Admin" },
+    { value: ROLES.SUPER_ADMIN, label: "Super Admin" },
+  ];
+
   return (
     <>
       <Card
@@ -1606,11 +1175,7 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, connectSync, 
         <div className="flex flex-wrap items-end gap-3">
           <div style={{ width: 420 }}>
             <Label>Shared endpoint</Label>
-            <Field
-              value={syncUrl}
-              onChange={setSyncUrl}
-              placeholder="https://script.google.com/macros/s/..../exec"
-            />
+            <Field value={syncUrl} onChange={setSyncUrl} placeholder="https://script.google.com/macros/s/..../exec" />
           </div>
           <Btn
             kind="solid"
@@ -1638,17 +1203,19 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, connectSync, 
       </Card>
 
       <Card
-        title="People and hourly cost"
-        note="Loaded from the S4 Connect site. Hourly cost drives every labor number in the reports, and fully loaded cost is the right figure here, not billing rate."
+        title="People, roles, and hourly cost"
+        note="Hourly cost drives every labor number in the reports; use fully loaded cost, not billing rate. Role decides what each person can see when they sign in: Contributors see only their own timesheet, Account Managers see only their assigned clients, Admins and Super Admin see everything."
       >
         <div className="grid gap-4" style={{ gridTemplateColumns: "minmax(0,1fr) minmax(0,320px)" }}>
-          <div>
+          <div className="overflow-x-auto">
             <table className="w-full border-collapse">
               <thead>
                 <tr>
                   <Th>Name</Th>
-                  <Th>Role</Th>
-                  <Th align="right" w="140px">Hourly cost</Th>
+                  <Th>Email</Th>
+                  <Th>Title</Th>
+                  <Th w="150px">Access</Th>
+                  <Th align="right" w="110px">Hourly cost</Th>
                   <Th w="90px"></Th>
                 </tr>
               </thead>
@@ -1665,11 +1232,29 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, connectSync, 
                     </Td>
                     <Td>
                       <Field
+                        value={e.email || ""}
+                        placeholder="name@s4connect.com"
+                        onChange={(v) =>
+                          saveCfg({ ...cfg, employees: cfg.employees.map((x) => (x.id === e.id ? { ...x, email: v } : x)) })
+                        }
+                      />
+                    </Td>
+                    <Td>
+                      <Field
                         value={e.role || ""}
-                        placeholder="Role"
+                        placeholder="Title"
                         onChange={(v) =>
                           saveCfg({ ...cfg, employees: cfg.employees.map((x) => (x.id === e.id ? { ...x, role: v } : x)) })
                         }
+                      />
+                    </Td>
+                    <Td>
+                      <Select
+                        value={e.accessLevel || ROLES.CONTRIBUTOR}
+                        onChange={(v) =>
+                          saveCfg({ ...cfg, employees: cfg.employees.map((x) => (x.id === e.id ? { ...x, accessLevel: v } : x)) })
+                        }
+                        options={ROLE_OPTIONS}
                       />
                     </Td>
                     <Td align="right">
@@ -1700,16 +1285,11 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, connectSync, 
                 ))}
               </tbody>
             </table>
-            <div className="flex gap-2 mt-3">
+            <div className="flex flex-wrap gap-2 mt-3">
               <Field value={newEmp.name} onChange={(v) => setNewEmp({ ...newEmp, name: v })} placeholder="Name" />
-              <Field value={newEmp.role} onChange={(v) => setNewEmp({ ...newEmp, role: v })} placeholder="Role" />
-              <Field
-                mono
-                width="140px"
-                value={newEmp.rate}
-                onChange={(v) => setNewEmp({ ...newEmp, rate: v })}
-                placeholder="Cost"
-              />
+              <Field value={newEmp.email} onChange={(v) => setNewEmp({ ...newEmp, email: v })} placeholder="Email" />
+              <Field value={newEmp.role} onChange={(v) => setNewEmp({ ...newEmp, role: v })} placeholder="Title" />
+              <Field mono width="110px" value={newEmp.rate} onChange={(v) => setNewEmp({ ...newEmp, rate: v })} placeholder="Cost" />
               <Btn
                 kind="solid"
                 disabled={!newEmp.name.trim()}
@@ -1718,17 +1298,25 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, connectSync, 
                     ...cfg,
                     employees: [
                       ...cfg.employees,
-                      { id: uid(), name: newEmp.name.trim(), role: newEmp.role.trim(), rate: toNumber(newEmp.rate) },
+                      {
+                        id: uid(),
+                        name: newEmp.name.trim(),
+                        role: newEmp.role.trim(),
+                        rate: toNumber(newEmp.rate),
+                        email: newEmp.email.trim(),
+                        accessLevel: ROLES.CONTRIBUTOR,
+                        managedClients: [],
+                      },
                     ],
                   });
-                  setNewEmp({ name: "", role: "", rate: "" });
+                  setNewEmp({ name: "", role: "", rate: "", email: "" });
                 }}
               >
                 Add
               </Btn>
             </div>
           </div>
-          <CsvInput label="Import or update costs, columns Name, Role and Hourly Cost" onRows={importEmployees} />
+          <CsvInput label="Import or update people, columns Name, Email, Role and Hourly Cost" onRows={importEmployees} />
         </div>
       </Card>
 
@@ -1737,11 +1325,12 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, connectSync, 
         note="Loaded from the client wall on the site. Names here have to match the client names in your monthly revenue file for profitability to line up. Anything set to hidden stays in the reports but drops out of the time entry dropdown."
       >
         <div className="grid gap-4" style={{ gridTemplateColumns: "minmax(0,1fr) minmax(0,320px)" }}>
-          <div>
+          <div className="overflow-x-auto">
             <table className="w-full border-collapse">
               <thead>
                 <tr>
                   <Th>Client</Th>
+                  <Th w="170px">Industry</Th>
                   <Th align="center" w="110px">In the list</Th>
                   <Th w="90px"></Th>
                 </tr>
@@ -1757,15 +1346,23 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, connectSync, 
                         }
                       />
                     </Td>
+                    <Td>
+                      <Select
+                        value={c.industry || ""}
+                        onChange={(v) =>
+                          saveCfg({ ...cfg, clients: cfg.clients.map((x) => (x.id === c.id ? { ...x, industry: v } : x)) })
+                        }
+                        placeholder="Unset"
+                        options={cfg.industries || DEFAULT_INDUSTRIES}
+                      />
+                    </Td>
                     <Td align="center">
                       <Btn
                         kind={c.active === false ? "ghost" : "teal"}
                         onClick={() =>
                           saveCfg({
                             ...cfg,
-                            clients: cfg.clients.map((x) =>
-                              x.id === c.id ? { ...x, active: x.active === false } : x
-                            ),
+                            clients: cfg.clients.map((x) => (x.id === c.id ? { ...x, active: x.active === false } : x)),
                           })
                         }
                       >
