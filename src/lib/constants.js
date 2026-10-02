@@ -165,7 +165,7 @@ export const DEFAULT_EMPLOYEES = [
   { id: "dan-woodford", name: "Dan Woodford", role: "Co-founder, Chief Marketing Officer", rate: 0, accessLevel: ROLES.ADMIN, managedClients: [], email: "" },
   { id: "phil-foster", name: "Phil Foster", role: "Creative Director", rate: 0, accessLevel: ROLES.CONTRIBUTOR, managedClients: [], email: "" },
   { id: "tammy-migliore", name: "Tammy Migliore", role: "SVP, Information Technology", rate: 0, accessLevel: ROLES.CONTRIBUTOR, managedClients: [], email: "" },
-  { id: "mo-hamid", name: "Mo Hamid", role: "Managing Director of Strategic Growth", rate: 0, accessLevel: ROLES.SUPER_ADMIN, managedClients: [], email: "mhamidzen@gmail.com" },
+  { id: "mo-hamid", name: "Mo Hamid", role: "Managing Director of Strategic Growth", rate: 0, accessLevel: ROLES.SUPER_ADMIN, managedClients: [], email: "mhamid@s4connectteam.com" },
   { id: "bella-crociata", name: "Bella Crociata", role: "Marketing Operations Manager", rate: 0, accessLevel: ROLES.ACCOUNT_MANAGER, managedClients: [], email: "" },
   { id: "dan-blondin", name: "Dan Blondin", role: "Business Development Manager", rate: 0, accessLevel: ROLES.CONTRIBUTOR, managedClients: [], email: "" },
   { id: "maria-eusebio", name: "Maria Eusebio", role: "Marketing Specialist", rate: 0, accessLevel: ROLES.CONTRIBUTOR, managedClients: [], email: "" },
