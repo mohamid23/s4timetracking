@@ -35,7 +35,7 @@ async function sendSetupEmail({ email, name, inviter, appUrl, token }) {
   const from = process.env.RESEND_FROM || "S4 Connect <onboarding@resend.dev>";
   const link = `${appUrl}/?setpw=${token}`;
   try {
-    await resend.emails.send({
+    const { data, error } = await resend.emails.send({
       from,
       to: email,
       subject: "Set your password for S4 Connect Time and Profitability",
@@ -46,7 +46,8 @@ async function sendSetupEmail({ email, name, inviter, appUrl, token }) {
         <p>This link works for 24 hours. If you didn't expect this, you can ignore it.</p>
       `,
     });
-    return { ok: true };
+    if (error) return { ok: false, error: error.message || JSON.stringify(error) };
+    return { ok: true, id: data?.id };
   } catch (err) {
     return { ok: false, error: String(err?.message || err) };
   }
