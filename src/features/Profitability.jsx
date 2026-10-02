@@ -21,6 +21,7 @@ import {
 import { isAdminLevel } from "../lib/roles";
 import { Btn, Card, CsvInput, Label, Select, Stat, Td, Th } from "../components/ui";
 import { RankedBarChart, TrendChart } from "../components/charts";
+import QuickBooksImport from "./QuickBooksImport";
 
 const DIMENSIONS = [
   { value: "client", label: "By client" },
@@ -271,6 +272,14 @@ export default function Profitability({ cfg, entries, finance, months, saveFinan
             </p>
           )}
         </Card>
+      )}
+
+      {canImport && granularity === "month" && (
+        <QuickBooksImport
+          monthLabel={monthLabel(ym)}
+          cfg={cfg}
+          onCommit={(newRows) => saveFinance(ym, [...(finance[ym] || []), ...newRows.map((r) => ({ id: uid(), ...r }))])}
+        />
       )}
 
       <Card
