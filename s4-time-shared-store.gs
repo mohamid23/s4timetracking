@@ -19,6 +19,11 @@
  * A note on security. Anyone holding this URL can read and write the book, so treat it like a
  * password and keep it in ClickUp behind your normal team access rather than anywhere public.
  * The token is what makes a guessed or leaked bare /exec URL useless.
+ *
+ * The Super Admin console's "invite a teammate" button sends mail through this script using
+ * MailApp, which sends as whichever Google account you deployed as ("Execute as: Me" above) —
+ * approve the Gmail permission in the same deploy prompt and invitations will go out from that
+ * account. No separate email service is needed.
  */
 
 var SHEET_NAME = 'store';
@@ -43,6 +48,13 @@ function doPost(e) {
         out = { ok: true };
       } else if (req.action === 'list') {
         out = { ok: true, keys: listKeys(req.prefix || '') };
+      } else if (req.action === 'log') {
+        appendLog(req.kind, req.entry || {});
+        out = { ok: true };
+      } else if (req.action === 'listLogs') {
+        out = { ok: true, rows: readLogs(req.kind, req.limit || 200) };
+      } else if (req.action === 'invite') {
+        out = sendInvite(req);
       } else {
         out = { error: 'Unknown action: ' + req.action };
       }
@@ -106,6 +118,82 @@ function writeKey(key, value) {
   var sh = sheet_();
   if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 4).clearContent();
   if (kept.length) sh.getRange(2, 1, kept.length, 4).setValues(kept);
+}
+
+/* ---------- activity and error log ---------- */
+
+var LOG_SHEET_NAME = 'logs';
+
+function logSheet_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(LOG_SHEET_NAME);
+  if (!sh) {
+    sh = ss.insertSheet(LOG_SHEET_NAME);
+    sh.appendRow(['ts', 'kind', 'actor', 'action', 'details']);
+  }
+  return sh;
+}
+
+function appendLog(kind, entry) {
+  var sh = logSheet_();
+  sh.appendRow([
+    entry.ts || Date.now(),
+    kind || 'activity',
+    entry.actor || '',
+    entry.action || '',
+    JSON.stringify(entry),
+  ]);
+  // Keep the sheet from growing without bound: trim to the most recent 2000 rows.
+  var last = sh.getLastRow();
+  var MAX_ROWS = 2000;
+  if (last - 1 > MAX_ROWS) {
+    sh.deleteRows(2, last - 1 - MAX_ROWS);
+  }
+}
+
+function readLogs(kind, limit) {
+  var sh = logSheet_();
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var values = sh.getRange(2, 1, last - 1, 5).getValues();
+  var filtered = values
+    .filter(function (r) { return !kind || r[1] === kind; })
+    .map(function (r) {
+      var details = {};
+      try { details = JSON.parse(r[4]); } catch (e) {}
+      return { ts: r[0], kind: r[1], actor: r[2], action: r[3], details: details };
+    })
+    .sort(function (a, b) { return b.ts - a.ts; });
+  return filtered.slice(0, limit || 200);
+}
+
+/* ---------- invitations ---------- */
+/**
+ * Sends a plain notification email, it does not create a token or a login flow.
+ * Identity in this app is "your email is on the team list in Setup with a role",
+ * so the actual account creation already happened client side before this runs;
+ * this just lets the new teammate know and tells them where to go.
+ */
+function sendInvite(req) {
+  var email = String(req.email || '').trim();
+  if (!email) return { error: 'Missing email' };
+  var appUrl = String(req.appUrl || '').trim();
+  var role = String(req.role || 'team member').trim();
+  var inviter = String(req.inviter || 'your team').trim();
+  var subject = 'You have been added to S4 Connect Time and Profitability';
+  var body =
+    'Hi,\n\n' +
+    inviter + ' added you to S4 Connect’s time and profitability tool as a ' + role + '.\n\n' +
+    (appUrl ? 'Open it here: ' + appUrl + '\n\n' : '') +
+    'Sign in with this email address: ' + email + '\n\n' +
+    'If it says your email is not on the team list, ask ' + inviter + ' to double check it under Setup.\n';
+  try {
+    MailApp.sendEmail(email, subject, body);
+    appendLog('activity', { actor: req.inviter || '', action: 'invite_sent', email: email, role: role });
+    return { ok: true };
+  } catch (err) {
+    return { error: String(err) };
+  }
 }
 
 /* ---------- optional: a readable tab finance can pivot ---------- */

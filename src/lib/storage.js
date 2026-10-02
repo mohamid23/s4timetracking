@@ -163,4 +163,32 @@ export const S = {
       this.call("log", { kind, entry: row }).catch(() => {});
     }
   },
+
+  /* Local-only fallback so the log viewer has something to show even without a
+     shared endpoint connected; remote mode merges in what the backend has too. */
+  async listLogs(kind, limit = 200) {
+    const localKey = kind === "error" ? "s4tt:log:error" : "s4tt:log:activity";
+    const local = (ls.get(localKey) || []).slice(-limit).reverse();
+    if (this.mode !== "remote") return local;
+    try {
+      const r = await this.call("listLogs", { kind, limit });
+      this.flag(true);
+      return r.rows || local;
+    } catch (e) {
+      this.flag(false, e.message);
+      return local;
+    }
+  },
+
+  async invite({ email, role, inviter, appUrl }) {
+    if (this.mode !== "remote") return { ok: false, error: "Connect the shared endpoint under Setup first." };
+    try {
+      const r = await this.call("invite", { email, role, inviter, appUrl });
+      this.flag(true);
+      return r.error ? { ok: false, error: r.error } : { ok: true };
+    } catch (e) {
+      this.flag(false, e.message);
+      return { ok: false, error: e.message };
+    }
+  },
 };

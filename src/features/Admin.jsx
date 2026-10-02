@@ -1,0 +1,161 @@
+import React, { useEffect, useState } from "react";
+import { BRAND, ROLES, ROLE_LABEL } from "../lib/constants";
+import { uid, clean } from "../lib/helpers";
+import { S } from "../lib/storage";
+import { Btn, Card, Field, Label, Select, Td, Th } from "../components/ui";
+
+const ROLE_OPTIONS = [
+  { value: ROLES.CONTRIBUTOR, label: ROLE_LABEL[ROLES.CONTRIBUTOR] },
+  { value: ROLES.ACCOUNT_MANAGER, label: ROLE_LABEL[ROLES.ACCOUNT_MANAGER] },
+  { value: ROLES.ADMIN, label: ROLE_LABEL[ROLES.ADMIN] },
+  { value: ROLES.SUPER_ADMIN, label: ROLE_LABEL[ROLES.SUPER_ADMIN] },
+];
+
+function fmtTime(ts) {
+  if (!ts) return "";
+  return new Date(Number(ts)).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function LogTable({ rows, empty }) {
+  if (!rows.length) {
+    return (
+      <p className="text-sm" style={{ color: BRAND.slate }}>
+        {empty}
+      </p>
+    );
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full border-collapse">
+        <thead>
+          <tr>
+            <Th w="160px">When</Th>
+            <Th w="160px">Who</Th>
+            <Th>What</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i}>
+              <Td mono>{fmtTime(r.ts)}</Td>
+              <Td>{r.actor || "—"}</Td>
+              <Td>
+                <span>{r.action || r.kind}</span>
+                {r.details && Object.keys(r.details).length > 0 && (
+                  <span className="text-xs block mt-0.5" style={{ color: BRAND.slate }}>
+                    {Object.entries(r.details)
+                      .filter(([k]) => !["ts", "kind", "actor", "action"].includes(k))
+                      .map(([k, v]) => `${k}: ${v}`)
+                      .join(", ")}
+                  </span>
+                )}
+              </Td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export default function Admin({ cfg, saveCfg, sync, meRecord }) {
+  const [form, setForm] = useState({ name: "", email: "", role: ROLES.CONTRIBUTOR });
+  const [status, setStatus] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [activity, setActivity] = useState([]);
+  const [errors, setErrors] = useState([]);
+
+  const refreshLogs = async () => {
+    setActivity(await S.listLogs("activity", 200));
+    setErrors(await S.listLogs("error", 200));
+  };
+
+  useEffect(() => {
+    refreshLogs();
+  }, []);
+
+  const inviteTeammate = async () => {
+    const name = clean(form.name);
+    const email = clean(form.email);
+    if (!name || !email) {
+      setStatus("Name and email are both required.");
+      return;
+    }
+    setBusy(true);
+    const existing = cfg.employees.find((e) => clean(e.email).toLowerCase() === email.toLowerCase());
+    const next = existing
+      ? cfg.employees.map((e) => (e === existing ? { ...e, name, accessLevel: form.role } : e))
+      : [...cfg.employees, { id: uid(), name, email, role: "", rate: 0, accessLevel: form.role, managedClients: [] }];
+    await saveCfg({ ...cfg, employees: next });
+
+    if (!sync.url) {
+      setStatus(`${name} was added with the ${ROLE_LABEL[form.role]} role. Connect the shared endpoint under Setup to also email them.`);
+      setBusy(false);
+      setForm({ name: "", email: "", role: ROLES.CONTRIBUTOR });
+      refreshLogs();
+      return;
+    }
+    const r = await S.invite({ email, role: ROLE_LABEL[form.role], inviter: meRecord?.name || "the team", appUrl: window.location.origin });
+    setStatus(
+      r.ok
+        ? `${name} was added and emailed at ${email}.`
+        : `${name} was added, but the invitation email failed to send: ${r.error}`
+    );
+    setBusy(false);
+    setForm({ name: "", email: "", role: ROLES.CONTRIBUTOR });
+    refreshLogs();
+  };
+
+  return (
+    <>
+      <Card
+        title="Invite a teammate"
+        note="Adds them to the team list with a role and, if the shared endpoint is connected, emails them to let them know."
+      >
+        <div className="flex flex-wrap items-end gap-3">
+          <div style={{ width: 200 }}>
+            <Label>Name</Label>
+            <Field value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder="Full name" />
+          </div>
+          <div style={{ width: 240 }}>
+            <Label>Email</Label>
+            <Field value={form.email} onChange={(v) => setForm({ ...form, email: v })} placeholder="name@s4connect.com" />
+          </div>
+          <div style={{ width: 180 }}>
+            <Label>Role</Label>
+            <Select value={form.role} onChange={(v) => setForm({ ...form, role: v })} options={ROLE_OPTIONS} />
+          </div>
+          <Btn kind="solid" onClick={inviteTeammate} disabled={busy || !form.name.trim() || !form.email.trim()}>
+            Add &amp; invite
+          </Btn>
+        </div>
+        {status && (
+          <p className="text-sm mt-3" style={{ color: BRAND.slate }}>
+            {status}
+          </p>
+        )}
+        {!sync.url && (
+          <p className="text-xs mt-2" style={{ color: BRAND.amber }}>
+            No shared endpoint connected — teammates are added locally only until you connect one under Setup.
+          </p>
+        )}
+      </Card>
+
+      <Card
+        title="Activity log"
+        note="Sign-ins, config changes, and revenue imports. Kept locally on this device, and on the shared endpoint if connected."
+        right={
+          <Btn onClick={refreshLogs} disabled={busy}>
+            Refresh
+          </Btn>
+        }
+      >
+        <LogTable rows={activity} empty="Nothing logged yet." />
+      </Card>
+
+      <Card title="Error log" note="Problems the app ran into, client and server side, for troubleshooting.">
+        <LogTable rows={errors} empty="No errors logged. That's good." />
+      </Card>
+    </>
+  );
+}

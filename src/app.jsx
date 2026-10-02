@@ -41,6 +41,7 @@ import { S4Mark, Label, Card, Btn, Field, Select, Th, Td, Bar, Stat, CsvInput, P
 import { RankedBarChart } from "./components/charts";
 import SignIn from "./features/SignIn";
 import Profitability from "./features/Profitability";
+import Admin from "./features/Admin";
 
 /* ================= app ================= */
 
@@ -113,6 +114,15 @@ function App() {
     const url = S.loadUrl();
     setSync({ url, online: true, error: "" });
     loadAll();
+
+    const onError = (e) => S.log("error", { message: e.message, source: e.filename, line: e.lineno });
+    const onRejection = (e) => S.log("error", { message: String(e.reason?.message || e.reason) });
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
   }, []);
 
   const connectSync = async (url) => {
@@ -234,6 +244,7 @@ function App() {
     ["reports", "Hours reports"],
     ["profit", "Profitability"],
     ["setup", "Setup"],
+    ["admin", "Admin"],
   ];
   const TABS = ALL_TABS.filter(([k]) => canSeeTab(meRecord, k));
 
@@ -363,6 +374,7 @@ function App() {
             busy={busy}
           />
         )}
+        {tab === "admin" && <Admin cfg={cfg} saveCfg={saveCfg} sync={sync} meRecord={meRecord} />}
       </main>
 
       <footer className="max-w-6xl mx-auto px-5 pb-10 pt-2">
