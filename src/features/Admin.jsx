@@ -64,6 +64,8 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
   const [busy, setBusy] = useState(false);
   const [activity, setActivity] = useState([]);
   const [errors, setErrors] = useState([]);
+  const [rowStatus, setRowStatus] = useState({});
+  const [sendingId, setSendingId] = useState(null);
 
   const refreshLogs = async () => {
     setActivity(await S.listLogs("activity", 200));
@@ -106,6 +108,28 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
     refreshLogs();
   };
 
+  const sendInviteToExisting = async (emp) => {
+    const email = clean(emp.email);
+    if (!email) {
+      setRowStatus((p) => ({ ...p, [emp.id]: "No email on file — add one under Setup first." }));
+      return;
+    }
+    if (!sync.url) {
+      setRowStatus((p) => ({ ...p, [emp.id]: "Connect the shared endpoint under Setup first." }));
+      return;
+    }
+    setSendingId(emp.id);
+    const r = await S.invite({
+      email,
+      role: ROLE_LABEL[emp.accessLevel || ROLES.CONTRIBUTOR],
+      inviter: meRecord?.name || "the team",
+      appUrl: window.location.origin,
+    });
+    setRowStatus((p) => ({ ...p, [emp.id]: r.ok ? `Emailed at ${email}.` : `Failed to send: ${r.error}` }));
+    setSendingId(null);
+    refreshLogs();
+  };
+
   return (
     <>
       <Card
@@ -139,6 +163,43 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
             No shared endpoint connected — teammates are added locally only until you connect one under Setup.
           </p>
         )}
+      </Card>
+
+      <Card
+        title="Send an invite to an existing teammate"
+        note="Everyone already on the team list, with a one-click email reminding them where to sign in."
+      >
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse">
+            <thead>
+              <tr>
+                <Th>Name</Th>
+                <Th>Email</Th>
+                <Th w="150px">Access</Th>
+                <Th w="260px"></Th>
+              </tr>
+            </thead>
+            <tbody>
+              {cfg.employees.map((e) => (
+                <tr key={e.id}>
+                  <Td>{e.name}</Td>
+                  <Td>{e.email || <span style={{ color: BRAND.amber }}>no email on file</span>}</Td>
+                  <Td>{ROLE_LABEL[e.accessLevel || ROLES.CONTRIBUTOR]}</Td>
+                  <Td align="right">
+                    <Btn onClick={() => sendInviteToExisting(e)} disabled={sendingId === e.id}>
+                      {sendingId === e.id ? "Sending…" : "Send invite"}
+                    </Btn>
+                    {rowStatus[e.id] && (
+                      <div className="text-xs mt-1" style={{ color: BRAND.slate }}>
+                        {rowStatus[e.id]}
+                      </div>
+                    )}
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </Card>
 
       <Card

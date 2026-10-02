@@ -19,7 +19,7 @@ import {
   downloadCSV,
 } from "../lib/helpers";
 import { isAdminLevel } from "../lib/roles";
-import { Btn, Card, CsvInput, Label, Select, Stat, Td, Th } from "../components/ui";
+import { Btn, Card, CsvInput, Field, Label, Select, Stat, Td, Th } from "../components/ui";
 import { RankedBarChart, TrendChart } from "../components/charts";
 import QuickBooksImport from "./QuickBooksImport";
 
@@ -159,7 +159,27 @@ function aggregate({ cfg, periodEntries, periodFinance, dimension, inScope, rate
   return { rows, unmatched, internalEntries };
 }
 
-export default function Profitability({ cfg, entries, finance, months, saveFinance, clientById, clientName, empName, rateOf, meRecord }) {
+export default function Profitability({ cfg, saveCfg, entries, finance, months, saveFinance, clientById, clientName, empName, rateOf, meRecord }) {
+  const [newClientName, setNewClientName] = useState("");
+  const [addClientMsg, setAddClientMsg] = useState("");
+
+  const addMyClient = () => {
+    const name = newClientName.trim();
+    if (!name || !meRecord) return;
+    const existing = cfg.clients.find((c) => norm(c.name) === norm(name));
+    const id = existing ? existing.id : `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Date.now().toString(36)}`;
+    const nextClients = existing ? cfg.clients : [...cfg.clients, { id, name, active: true }];
+    const alreadyManaged = (meRecord.managedClients || []).includes(id);
+    const nextEmployees = cfg.employees.map((e) =>
+      e.id === meRecord.id && !alreadyManaged ? { ...e, managedClients: [...(e.managedClients || []), id] } : e
+    );
+    saveCfg({ ...cfg, clients: nextClients, employees: nextEmployees });
+    setAddClientMsg(
+      existing && alreadyManaged ? `${name} is already on your list.` : existing ? `${name} already existed — added it to your list.` : `${name} added.`
+    );
+    setNewClientName("");
+  };
+
   const thisMonth = todayISO().slice(0, 7);
   const [granularity, setGranularity] = useState("month");
   const [ym, setYm] = useState(months.includes(thisMonth) ? thisMonth : months[months.length - 1] || thisMonth);
@@ -255,6 +275,28 @@ export default function Profitability({ cfg, entries, finance, months, saveFinan
 
   return (
     <>
+      {!canImport && (
+        <Card
+          title="Add a client"
+          note="Don't see a client you bill for? Add it here — it's added to your list automatically."
+        >
+          <div className="flex flex-wrap items-end gap-3">
+            <div style={{ width: 280 }}>
+              <Label>Client name</Label>
+              <Field value={newClientName} onChange={setNewClientName} placeholder="New client name" />
+            </div>
+            <Btn kind="solid" onClick={addMyClient} disabled={!newClientName.trim()}>
+              Add client
+            </Btn>
+          </div>
+          {addClientMsg && (
+            <p className="text-sm mt-3" style={{ color: BRAND.slate }}>
+              {addClientMsg}
+            </p>
+          )}
+        </Card>
+      )}
+
       {canImport && granularity === "month" && (
         <Card
           title="Monthly revenue and cost import"

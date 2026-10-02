@@ -350,6 +350,7 @@ function App() {
         {tab === "profit" && (
           <Profitability
             cfg={cfg}
+            saveCfg={saveCfg}
             entries={entries}
             finance={finance}
             months={months}
