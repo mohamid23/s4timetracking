@@ -113,6 +113,48 @@ export default async function handler(req, res) {
       return;
     }
 
+    /* Same token as requestSetup, just handed back to the admin to paste into
+       Slack/text themselves instead of emailed automatically — for when
+       outbound email isn't set up or isn't landing. */
+    if (action === "createSetupLink") {
+      const email = String(body.email || "").trim();
+      if (!email) {
+        res.json({ ok: false, error: "Missing email." });
+        return;
+      }
+      const token = crypto.randomBytes(24).toString("hex");
+      await redis.set(tokenKey(token), JSON.stringify({ email, exp: Date.now() + TOKEN_TTL_MS }), {
+        ex: Math.ceil(TOKEN_TTL_MS / 1000),
+      });
+      res.json({ ok: true, token });
+      return;
+    }
+
+    /* No token: anyone who knows a teammate's email can set its first
+       password if one hasn't been set yet. Acceptable trade-off for an
+       internal tool when email delivery isn't available — the account still
+       requires a password to sign in afterward, this only skips proving
+       inbox ownership up front. */
+    if (action === "setPasswordDirect") {
+      const email = String(body.email || "").trim();
+      if (!email) {
+        res.json({ ok: false, error: "Missing email." });
+        return;
+      }
+      const existing = await redis.get(credKey(email));
+      if (existing) {
+        res.json({ ok: false, error: "This account already has a password. Use \"Forgot password\" instead." });
+        return;
+      }
+      if (!body.password || body.password.length < 8) {
+        res.json({ ok: false, error: "Password needs to be at least 8 characters." });
+        return;
+      }
+      await redis.set(credKey(email), hashPassword(body.password));
+      res.json({ ok: true });
+      return;
+    }
+
     if (action === "verifySetupToken") {
       const raw = await redis.get(tokenKey(body.token || ""));
       const data = typeof raw === "string" ? JSON.parse(raw) : raw;

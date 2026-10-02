@@ -76,6 +76,18 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
     refreshLogs();
   }, []);
 
+  const copyLinkForEmail = async (email, id) => {
+    const r = await S.createSetupLink(email);
+    if (!r.ok) return { ok: false, error: r.error };
+    const link = `${window.location.origin}/?setpw=${r.token}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      return { ok: true, copied: true, link };
+    } catch {
+      return { ok: true, copied: false, link };
+    }
+  };
+
   const inviteTeammate = async () => {
     const name = clean(form.name);
     const email = clean(form.email);
@@ -90,11 +102,13 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
       : [...cfg.employees, { id: uid(), name, email, role: "", rate: 0, accessLevel: form.role, managedClients: [] }];
     await saveCfg({ ...cfg, employees: next });
 
-    const r = await S.requestSetup({ email, name, inviter: meRecord?.name || "the team" });
+    const r = await copyLinkForEmail(email);
     setStatus(
-      r.ok
-        ? `${name} was added and emailed at ${email} to set a password.`
-        : `${name} was added, but the invitation email failed to send: ${r.error}`
+      !r.ok
+        ? `${name} was added, but the setup link couldn't be created: ${r.error}`
+        : r.copied
+        ? `${name} was added. Setup link copied — paste it to them (Slack, text, etc.).`
+        : `${name} was added. Couldn't copy automatically — here's the link: ${r.link}`
     );
     setBusy(false);
     setForm({ name: "", email: "", role: ROLES.CONTRIBUTOR });
@@ -108,10 +122,14 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
       return;
     }
     setSendingId(emp.id);
-    const r = await S.requestSetup({ email, name: emp.name, inviter: meRecord?.name || "the team" });
+    const r = await copyLinkForEmail(email, emp.id);
     setRowStatus((p) => ({
       ...p,
-      [emp.id]: r.ok ? `Emailed at ${email} to set a password.` : `Failed to send: ${r.error}`,
+      [emp.id]: !r.ok
+        ? `Couldn't create a link: ${r.error}`
+        : r.copied
+        ? "Setup link copied — paste it to them."
+        : `Couldn't copy automatically — here's the link: ${r.link}`,
     }));
     setSendingId(null);
     refreshLogs();
@@ -121,7 +139,7 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
     <>
       <Card
         title="Invite a teammate"
-        note="Adds them to the team list with a role, and emails them a link to set their own password."
+        note="Adds them to the team list with a role, and copies a one-time setup link to your clipboard to send them yourself."
       >
         <div className="flex flex-wrap items-end gap-3">
           <div style={{ width: 200 }}>
@@ -137,7 +155,7 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
             <Select value={form.role} onChange={(v) => setForm({ ...form, role: v })} options={ROLE_OPTIONS} />
           </div>
           <Btn kind="solid" onClick={inviteTeammate} disabled={busy || !form.name.trim() || !form.email.trim()}>
-            Add &amp; invite
+            Add &amp; copy setup link
           </Btn>
         </div>
         {status && (
@@ -154,8 +172,8 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
       </Card>
 
       <Card
-        title="Send an invite to an existing teammate"
-        note="Everyone already on the team list, with a one-click email to set a password and sign in."
+        title="Send a setup link to an existing teammate"
+        note="Everyone already on the team list. Copies a one-time link to set a password — paste it to them however you'd like."
       >
         <div className="overflow-x-auto">
           <table className="w-full border-collapse">
@@ -175,7 +193,7 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
                   <Td>{ROLE_LABEL[e.accessLevel || ROLES.CONTRIBUTOR]}</Td>
                   <Td align="right">
                     <Btn onClick={() => sendInviteToExisting(e)} disabled={sendingId === e.id}>
-                      {sendingId === e.id ? "Sending…" : "Send invite"}
+                      {sendingId === e.id ? "Creating…" : "Copy setup link"}
                     </Btn>
                     {rowStatus[e.id] && (
                       <div className="text-xs mt-1" style={{ color: BRAND.slate }}>

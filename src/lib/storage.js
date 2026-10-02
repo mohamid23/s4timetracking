@@ -174,4 +174,16 @@ export const S = {
   async setPassword(token, password) {
     return this.auth("setPassword", { token, password });
   },
+
+  /* Returns a token to build a shareable link from, without emailing it —
+     for pasting into Slack/text yourself. */
+  async createSetupLink(email) {
+    return this.auth("createSetupLink", { email });
+  },
+
+  /* No proof of inbox ownership — just lets someone set the first password
+     on an account that doesn't have one yet. */
+  async setPasswordDirect(email, password) {
+    return this.auth("setPasswordDirect", { email, password });
+  },
 };

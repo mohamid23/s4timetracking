@@ -147,6 +147,8 @@ export default function SignIn({ cfg, onSignIn, onDemo }) {
     return <SetPasswordScreen token={setpwToken} cfg={cfg} onSignIn={onSignIn} />;
   }
 
+  const [confirm, setConfirm] = useState("");
+
   const submitEmail = async () => {
     const trimmed = email.trim();
     if (!isValidEmail(trimmed)) {
@@ -163,22 +165,27 @@ export default function SignIn({ cfg, onSignIn, onDemo }) {
     const has = await S.hasPassword(trimmed);
     setBusy(false);
     setMatched(hit);
-    if (has) {
-      setMode("password");
-    } else {
-      await sendSetupLink(hit, trimmed);
-    }
+    setMode(has ? "password" : "create");
   };
 
-  const sendSetupLink = async (hit, trimmedEmail) => {
-    setBusy(true);
-    const r = await S.requestSetup({ email: trimmedEmail, name: hit.name, inviter: "S4 Connect" });
-    setBusy(false);
-    if (!r.ok) {
-      setError(r.error || "Couldn't send a setup email.");
+  const submitCreate = async () => {
+    setError("");
+    if (password.length < 8) {
+      setError("Password needs to be at least 8 characters.");
       return;
     }
-    setMode("sent");
+    if (password !== confirm) {
+      setError("Passwords don't match.");
+      return;
+    }
+    setBusy(true);
+    const r = await S.setPasswordDirect(email.trim(), password);
+    setBusy(false);
+    if (!r.ok) {
+      setError(r.error || "Couldn't set that password.");
+      return;
+    }
+    onSignIn(matched.id);
   };
 
   const submitPassword = async () => {
@@ -243,21 +250,31 @@ export default function SignIn({ cfg, onSignIn, onDemo }) {
                   <Btn kind="solid" onClick={submitPassword} disabled={busy}>
                     {busy ? "Signing in…" : "Sign in"}
                   </Btn>
-                  <button
-                    className="text-xs underline"
-                    style={{ color: BRAND.slate }}
-                    onClick={() => sendSetupLink(matched, email.trim())}
-                  >
-                    Forgot password?
-                  </button>
+                  <span className="text-xs" style={{ color: BRAND.slate }}>
+                    Forgot it? Ask an admin for a new setup link.
+                  </span>
                 </div>
               </>
             )}
-            {mode === "sent" && (
-              <p className="text-sm" style={{ color: BRAND.slate }}>
-                We emailed a link to <strong>{email.trim()}</strong> to set a password. Check your inbox — the link
-                works for 24 hours.
-              </p>
+            {mode === "create" && (
+              <>
+                <p className="text-sm mb-3" style={{ color: BRAND.slate }}>
+                  First time signing in as <strong>{matched?.name}</strong> — set a password.
+                </p>
+                <label className="text-xs uppercase tracking-widest mb-1 block" style={{ color: BRAND.slate }}>
+                  New password
+                </label>
+                <Field value={password} onChange={setPassword} type="password" placeholder="At least 8 characters" autoFocus />
+                <label className="text-xs uppercase tracking-widest mb-1 mt-3 block" style={{ color: BRAND.slate }}>
+                  Confirm password
+                </label>
+                <Field value={confirm} onChange={setConfirm} type="password" onKeyDown={(e) => e.key === "Enter" && submitCreate()} />
+                <div className="mt-3">
+                  <Btn kind="solid" onClick={submitCreate} disabled={busy}>
+                    {busy ? "Setting…" : "Set password and sign in"}
+                  </Btn>
+                </div>
+              </>
             )}
             {error && (
               <p className="text-xs mt-2" style={{ color: BRAND.red }}>
