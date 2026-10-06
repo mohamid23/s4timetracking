@@ -90,9 +90,18 @@ function SetPasswordScreen({ token, cfg, onSignIn }) {
           </p>
         )}
         {state === "invalid" && (
-          <p className="text-sm" style={{ color: BRAND.red }}>
-            {error}
-          </p>
+          <>
+            <p className="text-sm mb-3" style={{ color: BRAND.red }}>
+              {error}
+            </p>
+            <Btn
+              onClick={() => {
+                window.location.href = window.location.pathname;
+              }}
+            >
+              Go to sign in
+            </Btn>
+          </>
         )}
         {state === "done" && (
           <p className="text-sm" style={{ color: BRAND.slate }}>

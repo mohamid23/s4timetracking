@@ -7,7 +7,7 @@ import { redisFromEnv, NOT_CONNECTED_MESSAGE } from "./_lib/redis.js";
    actually controls that inbox. Everything lives in the same Redis store
    as the rest of the app's data — no separate user database. */
 
-const TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const credKey = (email) => `s4tt:cred:${email.trim().toLowerCase()}`;
 const tokenKey = (token) => `s4tt:authtoken:${token}`;
 
@@ -43,7 +43,7 @@ async function sendSetupEmail({ email, name, inviter, appUrl, token }) {
         <p>Hi${name ? ` ${name}` : ""},</p>
         <p>${inviter || "Your team"} added you to S4 Connect's time and profitability tool.</p>
         <p><a href="${link}">Set your password and sign in</a></p>
-        <p>This link works for 24 hours. If you didn't expect this, you can ignore it.</p>
+        <p>This link works for 7 days. If you didn't expect this, you can ignore it.</p>
       `,
     });
     if (error) return { ok: false, error: error.message || JSON.stringify(error) };
@@ -159,7 +159,7 @@ export default async function handler(req, res) {
       const raw = await redis.get(tokenKey(body.token || ""));
       const data = typeof raw === "string" ? JSON.parse(raw) : raw;
       if (!data || data.exp < Date.now()) {
-        res.json({ ok: false, error: "This link has expired. Ask to be invited again." });
+        res.json({ ok: false, error: "This link has expired or was already used. If you already set a password, go back and sign in with your email; otherwise ask your admin for a new link." });
         return;
       }
       res.json({ ok: true, email: data.email });
@@ -170,7 +170,7 @@ export default async function handler(req, res) {
       const raw = await redis.get(tokenKey(body.token || ""));
       const data = typeof raw === "string" ? JSON.parse(raw) : raw;
       if (!data || data.exp < Date.now()) {
-        res.json({ ok: false, error: "This link has expired. Ask to be invited again." });
+        res.json({ ok: false, error: "This link has expired or was already used. If you already set a password, go back and sign in with your email; otherwise ask your admin for a new link." });
         return;
       }
       if (!body.password || body.password.length < 8) {
