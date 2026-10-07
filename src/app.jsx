@@ -57,82 +57,167 @@ function App() {
   const [sync, setSync] = useState({ online: true, error: "" });
   const [busy, setBusy] = useState(false);
   const [demo, setDemo] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
 
   const flash = (msg) => {
     setStatus(msg);
     setTimeout(() => setStatus(""), 2500);
   };
 
-  // cfgRef: latest config on this screen. baseRef: the last version known to match the shared book.
+  // cfgRef: latest config on this screen. baseRef: last version confirmed to match the shared book.
   const cfgRef = useRef(cfg);
   const baseRef = useRef(null);
+  const entriesRef = useRef({});
   const persistTimer = useRef(null);
   const persisting = useRef(false);
+  const writeInflight = useRef(0);
+  const writeChains = useRef({});
+  const refreshing = useRef(false);
   const inDemo = useRef(false);
   inDemo.current = demo;
+  const BASE_KEY = "base:cfg";
 
-  const applyCfg = (next, { base = true } = {}) => {
+  const applyCfg = (next) => {
     cfgRef.current = next;
-    if (base) baseRef.current = next;
     setCfg(next);
+  };
+  // Only call this once a version has actually reached the shared book.
+  const markBase = (next) => {
+    baseRef.current = next;
+    S.setLocal(BASE_KEY, next);
+  };
+  const applyEntries = (next) => {
+    entriesRef.current = next;
+    setEntries(next);
+  };
+
+  /* Changes that haven't reached the shared book yet (a dropped connection, a closed
+     tab mid-save) are remembered in this browser and re-sent automatically until they
+     land. `snapshotPending` must run before any remote read, since reads refresh the
+     local copy. */
+  const snapshotPending = () =>
+    Object.fromEntries(
+      S.getDirty()
+        .map((k) => [k, S.getLocal(k)])
+        .filter(([, v]) => v != null)
+    );
+
+  const syncPending = async (pending) => {
+    for (const [key, local] of Object.entries(pending)) {
+      if (key === CONFIG_KEY) {
+        const r = await S.fetchRemote(CONFIG_KEY);
+        if (!r.ok) return false;
+        const mine = normalizeCfg(local);
+        const remote = r.value ? normalizeCfg(r.value) : null;
+        const baseRaw = S.getLocal(BASE_KEY);
+        const merged = remote ? mergeCfg(baseRaw ? normalizeCfg(baseRaw) : remote, mine, remote) : mine;
+        applyCfg(merged);
+        if (await S.set(CONFIG_KEY, merged)) markBase(merged);
+        else return false;
+      } else if (key.startsWith(PREFIX + "entries:")) {
+        const ym = key.split(":").pop();
+        const who = (await S.getPersonal(ME_KEY))?.emp;
+        const r = await S.fetchRemote(key);
+        if (!r.ok) return false;
+        const merged =
+          who && Array.isArray(r.value) ? [...r.value.filter((e) => e.emp !== who), ...local.filter((e) => e.emp === who)] : local;
+        applyEntries({ ...entriesRef.current, [ym]: merged });
+        if (!(await S.set(key, merged))) return false;
+      } else if (key.startsWith(PREFIX + "finance:")) {
+        const ym = key.split(":").pop();
+        setFinance((prev) => ({ ...prev, [ym]: local }));
+        if (!(await S.set(key, local))) return false;
+      }
+    }
+    return true;
   };
 
   const loadAll = async () => {
     setBusy(true);
+    const pending = snapshotPending();
     try {
-      const c = await S.get(CONFIG_KEY);
-      if (c) {
-        applyCfg(normalizeCfg(c));
-      } else {
+      // Read the shared book without letting it overwrite a local copy that hasn't synced yet,
+      // and only treat a version as "confirmed" if it genuinely came from the shared book.
+      const rc = await S.fetchRemote(CONFIG_KEY);
+      if (rc.ok && rc.value) {
+        const remote = normalizeCfg(rc.value);
+        if (pending[CONFIG_KEY]) {
+          applyCfg(normalizeCfg(pending[CONFIG_KEY]));
+        } else {
+          applyCfg(remote);
+          S.setLocal(CONFIG_KEY, rc.value);
+          markBase(remote);
+        }
+      } else if (rc.ok) {
         const seeded = normalizeCfg({});
         applyCfg(seeded);
-        await S.set(CONFIG_KEY, seeded);
+        if (await S.set(CONFIG_KEY, seeded)) markBase(seeded);
+      } else {
+        const local = S.getLocal(CONFIG_KEY);
+        applyCfg(normalizeCfg(local || {}));
       }
       const keys = await S.list(PREFIX);
       const ent = {};
       const fin = {};
+      const readKey = async (k) => {
+        const r = await S.fetchRemote(k);
+        if (r.ok && !pending[k]) S.setLocal(k, r.value);
+        return pending[k] ?? (r.ok ? r.value : S.getLocal(k)) ?? [];
+      };
       for (const k of keys) {
-        if (k.startsWith(PREFIX + "entries:")) {
-          const ym = k.split(":").pop();
-          ent[ym] = (await S.get(k)) || [];
-        } else if (k.startsWith(PREFIX + "finance:")) {
-          const ym = k.split(":").pop();
-          fin[ym] = (await S.get(k)) || [];
-        }
+        if (k.startsWith(PREFIX + "entries:")) ent[k.split(":").pop()] = await readKey(k);
+        else if (k.startsWith(PREFIX + "finance:")) fin[k.split(":").pop()] = await readKey(k);
       }
-      setEntries(ent);
+      applyEntries(ent);
       setFinance(fin);
       const m = await S.getPersonal(ME_KEY);
       if (m?.emp) setMe(m.emp);
+      if (Object.keys(pending).length) await syncPending(pending);
     } finally {
       setBusy(false);
       setReady(true);
     }
   };
 
-  /* Quietly pull in what other people have changed. Skipped in demo mode, and while
-     this person has an unsaved config change in flight so it can't undo their typing. */
-  const refreshShared = async () => {
-    if (inDemo.current || persistTimer.current || persisting.current) return;
-    const c = await S.get(CONFIG_KEY);
-    if (persistTimer.current || persisting.current) return;
-    if (c) {
-      const remote = normalizeCfg(c);
-      if (!sameJson(remote, cfgRef.current)) applyCfg(remote);
+  /* Runs on a timer and whenever the tab comes back into view: first re-sends anything
+     unsynced, otherwise quietly pulls in what other people have changed. Held off while
+     this person has a save in flight so it can never undo their typing. */
+  const refreshShared = async ({ full = true } = {}) => {
+    if (inDemo.current || refreshing.current || persistTimer.current || persisting.current || writeInflight.current > 0) return;
+    refreshing.current = true;
+    try {
+      const pending = snapshotPending();
+      if (Object.keys(pending).length) {
+        await syncPending(pending);
+        return;
+      }
+      if (!full) return;
+      const c = await S.get(CONFIG_KEY);
+      if (persistTimer.current || persisting.current || writeInflight.current > 0) return;
+      if (c) {
+        const remote = normalizeCfg(c);
+        if (!sameJson(remote, cfgRef.current)) applyCfg(remote);
+        markBase(remote);
+      }
+      const keys = await S.list(PREFIX);
+      const ent = {};
+      const fin = {};
+      for (const k of keys) {
+        if (k.startsWith(PREFIX + "entries:")) ent[k.split(":").pop()] = (await S.get(k)) || [];
+        else if (k.startsWith(PREFIX + "finance:")) fin[k.split(":").pop()] = (await S.get(k)) || [];
+      }
+      if (writeInflight.current > 0) return;
+      if (!sameJson(entriesRef.current, ent)) applyEntries(ent);
+      setFinance((prev) => (sameJson(prev, fin) ? prev : fin));
+    } finally {
+      refreshing.current = false;
     }
-    const keys = await S.list(PREFIX);
-    const ent = {};
-    const fin = {};
-    for (const k of keys) {
-      if (k.startsWith(PREFIX + "entries:")) ent[k.split(":").pop()] = (await S.get(k)) || [];
-      else if (k.startsWith(PREFIX + "finance:")) fin[k.split(":").pop()] = (await S.get(k)) || [];
-    }
-    setEntries((prev) => (sameJson(prev, ent) ? prev : ent));
-    setFinance((prev) => (sameJson(prev, fin) ? prev : fin));
   };
 
   useEffect(() => {
     S.onStatus = (ok, err) => setSync((p) => ({ ...p, online: ok, error: ok ? "" : err || "" }));
+    S.onDirtyChange = setPendingCount;
+    setPendingCount(S.getDirty().length);
     loadAll();
 
     const onError = (e) => S.log("error", { message: e.message, source: e.filename, line: e.lineno });
@@ -140,76 +225,110 @@ function App() {
     window.addEventListener("error", onError);
     window.addEventListener("unhandledrejection", onRejection);
 
-    const onVisible = () => document.visibilityState === "visible" && refreshShared();
+    const visible = () => document.visibilityState === "visible";
+    const onVisible = () => visible() && refreshShared();
+    const onOnline = () => refreshShared();
+    const onBeforeUnload = (e) => {
+      if (S.getDirty().length) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
     document.addEventListener("visibilitychange", onVisible);
-    const interval = setInterval(() => document.visibilityState === "visible" && refreshShared(), 45000);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("beforeunload", onBeforeUnload);
+
+    // Every 15s retry anything unsynced; every third tick (about 45s) also pull in others' changes.
+    let tick = 0;
+    const interval = setInterval(() => {
+      tick += 1;
+      if (visible()) refreshShared({ full: tick % 3 === 0 });
+    }, 15000);
     return () => {
       window.removeEventListener("error", onError);
       window.removeEventListener("unhandledrejection", onRejection);
       document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("beforeunload", onBeforeUnload);
       clearInterval(interval);
     };
   }, []);
 
-  const pushLocalToSync = async () => {
-    setBusy(true);
-    await S.set(CONFIG_KEY, cfg);
-    for (const [ym, rows] of Object.entries(entries)) await S.set(entriesKey(ym), rows);
-    for (const [ym, rows] of Object.entries(finance)) await S.set(financeKey(ym), rows);
-    setBusy(false);
-    flash("This browser's data was pushed to shared storage");
-  };
-
-  /* Shows the change immediately, then (after a short pause so typing isn't one
-     network call per keystroke) merges it with whatever is in the shared book now
-     before writing — so a screen that's a few minutes stale can't wipe out a
-     client or teammate someone else just added. */
+  /* Shows the change immediately and remembers it locally, then (after a short pause so
+     typing isn't a network call per keystroke) merges it with whatever is in the shared
+     book now before writing — so a screen that's a few minutes stale can't wipe out a
+     client or teammate someone else just added. If the write fails it stays queued and
+     is retried automatically. */
   const saveCfg = (next) => {
-    applyCfg(next, { base: false });
+    applyCfg(next);
     if (inDemo.current) return Promise.resolve();
+    S.setLocalPending(CONFIG_KEY, next);
     clearTimeout(persistTimer.current);
     return new Promise((resolve) => {
       persistTimer.current = setTimeout(async () => {
         persistTimer.current = null;
         persisting.current = true;
-        const mine = cfgRef.current;
-        const prev = baseRef.current || mine;
-        const raw = await S.get(CONFIG_KEY);
-        const merged = raw ? mergeCfg(prev, mine, normalizeCfg(raw)) : mine;
-        if (persistTimer.current || cfgRef.current !== mine) {
-          // they kept typing while we were reading; the newer save will carry it all
+        try {
+          const mine = cfgRef.current;
+          const prev = baseRef.current || mine;
+          const r = await S.fetchRemote(CONFIG_KEY);
+          const merged = r.ok && r.value ? mergeCfg(prev, mine, normalizeCfg(r.value)) : mine;
+          if (persistTimer.current || cfgRef.current !== mine) return; // they kept typing; the newer save carries it all
+          applyCfg(merged);
+          const ok = await S.set(CONFIG_KEY, merged);
+          if (ok) markBase(merged);
+          S.log("activity", { actor: me, action: "config_saved" });
+          flash(ok ? "Saved" : "Not synced yet — saved on this device, retrying automatically");
+        } finally {
           persisting.current = false;
           resolve();
-          return;
         }
-        applyCfg(merged);
-        const ok = await S.set(CONFIG_KEY, merged);
-        S.log("activity", { actor: me, action: "config_saved" });
-        flash(ok ? "Saved" : "Saved on this device only, the shared book is unreachable");
-        persisting.current = false;
-        resolve();
       }, 500);
     });
   };
 
-  /* Everyone only ever edits their own rows, so a save keeps whatever the shared book
-     holds for other people and replaces only this person's lines for the month. */
-  const saveMonth = async (ym, rows) => {
-    let merged = rows;
-    if (me) {
-      const remote = await S.get(entriesKey(ym));
-      if (Array.isArray(remote)) merged = [...remote.filter((e) => e.emp !== me), ...rows.filter((e) => e.emp === me)];
-    }
-    setEntries((prev) => ({ ...prev, [ym]: merged }));
-    const ok = await S.set(entriesKey(ym), merged);
-    flash(ok ? "Saved" : "Saved on this device only, the shared book is unreachable");
+  /* The screen updates instantly and the write is queued per month, so quickly tabbing
+     through the hours grid can never build one save from a copy that's missing the last
+     cell. Everyone only edits their own rows, so each write keeps what the shared book
+     holds for other people and replaces only this person's lines. */
+  const saveMonth = (ym, rows) => {
+    applyEntries({ ...entriesRef.current, [ym]: rows });
+    if (inDemo.current) return Promise.resolve();
+    S.setLocalPending(entriesKey(ym), rows);
+    const prevChain = writeChains.current[ym] || Promise.resolve();
+    const run = prevChain.then(async () => {
+      writeInflight.current += 1;
+      try {
+        const mine = entriesRef.current[ym];
+        let merged = mine;
+        if (me) {
+          const r = await S.fetchRemote(entriesKey(ym));
+          if (r.ok && Array.isArray(r.value)) merged = [...r.value.filter((e) => e.emp !== me), ...mine.filter((e) => e.emp === me)];
+        }
+        if (entriesRef.current[ym] !== mine) return; // a newer edit is queued right behind this one
+        applyEntries({ ...entriesRef.current, [ym]: merged });
+        const ok = await S.set(entriesKey(ym), merged);
+        flash(ok ? "Saved" : "Not synced yet — saved on this device, retrying automatically");
+      } finally {
+        writeInflight.current -= 1;
+      }
+    });
+    writeChains.current[ym] = run.catch(() => {});
+    return run;
   };
 
   const saveFinance = async (ym, rows) => {
     setFinance((prev) => ({ ...prev, [ym]: rows }));
+    if (inDemo.current) {
+      flash("Sample data only, nothing is saved");
+      return;
+    }
+    S.setLocalPending(financeKey(ym), rows);
+    writeInflight.current += 1;
     const ok = await S.set(financeKey(ym), rows);
+    writeInflight.current -= 1;
     S.log("activity", { actor: me, action: "finance_imported", month: ym, rows: rows.length });
-    flash(ok ? "Saved" : "Saved on this device only, the shared book is unreachable");
+    flash(ok ? "Saved" : "Not synced yet — saved on this device, retrying automatically");
   };
 
   const pickMe = async (empId) => {
@@ -229,8 +348,8 @@ function App() {
 
   const enterDemo = () => {
     const book = buildDemoBook();
-    setCfg(book.cfg);
-    setEntries(book.entries);
+    applyCfg(book.cfg);
+    applyEntries(book.entries);
     setFinance(book.finance);
     setDemo(true);
     setMe(book.cfg.employees[0].id);
@@ -311,13 +430,25 @@ function App() {
                 onClick={loadAll}
                 className="text-xs px-2 py-1 border"
                 style={{
-                  borderColor: sync.online ? "#3A4560" : BRAND.amber,
-                  color: sync.online ? "#9AA6BF" : BRAND.amber,
+                  borderColor: sync.online && !pendingCount ? "#3A4560" : BRAND.amber,
+                  color: sync.online && !pendingCount ? "#9AA6BF" : BRAND.amber,
                   background: "transparent",
                 }}
-                title={sync.online ? "Shared with your team, click to refresh" : sync.error || "Shared storage unreachable"}
+                title={
+                  pendingCount
+                    ? "Some changes haven't reached the shared book yet. They're saved on this device and retry automatically."
+                    : sync.online
+                    ? "Shared with your team, click to refresh"
+                    : sync.error || "Shared storage unreachable"
+                }
               >
-                {busy ? "Working" : sync.online ? "Shared, refresh" : "Shared storage offline"}
+                {busy
+                  ? "Working"
+                  : pendingCount
+                  ? "Syncing, retrying…"
+                  : sync.online
+                  ? "Shared, refresh"
+                  : "Shared storage offline"}
               </button>
             )}
             <div className="text-right">
@@ -401,7 +532,7 @@ function App() {
             finance={finance}
             allEntries={allEntries}
             sync={sync}
-            pushLocalToSync={pushLocalToSync}
+            pending={pendingCount}
             refresh={loadAll}
             busy={busy}
           />
@@ -871,7 +1002,7 @@ function Reports({ cfg, allEntries, months, empName, clientName, rateOf }) {
 
 /* ================= setup ================= */
 
-function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, pushLocalToSync, refresh, busy }) {
+function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, pending, refresh, busy }) {
   const [newEmp, setNewEmp] = useState({ name: "", role: "", rate: "", email: "" });
   const [newClient, setNewClient] = useState("");
   const [newSvc, setNewSvc] = useState("");
@@ -922,17 +1053,19 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, pushLocalToSy
     <>
       <Card
         title="Where the data lives"
-        note="Everyone using this app automatically shares one book — there's nothing to connect. A local copy is still written on every save, so a brief outage never costs anyone their work."
+        note="Everyone using this app automatically shares one book. Every change is kept on this device first and retried until it reaches the shared book, so a dropped connection or a closed tab never loses work."
         right={
           <Btn onClick={refresh} disabled={busy}>
-            {busy ? "Checking…" : "Check connection"}
+            {busy ? "Checking…" : "Check now"}
           </Btn>
         }
       >
         <p className="text-sm" style={{ color: sync.online ? BRAND.slate : BRAND.red }}>
           {sync.online
-            ? "Connected. Everyone signed in sees the same data."
-            : `Shared storage unreachable: ${sync.error} Entries are still saving locally on this device.`}
+            ? pending
+              ? `Connected. ${pending} change${pending === 1 ? "" : "s"} still sending, they'll go through on their own.`
+              : "Connected. Everyone signed in sees the same data."
+            : `Shared storage unreachable: ${sync.error} Your changes are saved on this device and will go through automatically as soon as the connection is back.`}
         </p>
         {!sync.online && (
           <p className="text-xs mt-2" style={{ color: BRAND.slate }}>
@@ -941,11 +1074,6 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, pushLocalToSy
             redeploy.
           </p>
         )}
-        <div className="mt-3">
-          <Btn onClick={pushLocalToSync} disabled={busy}>
-            Push this browser's data to shared storage
-          </Btn>
-        </div>
       </Card>
 
       <Card

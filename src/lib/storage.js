@@ -66,6 +66,54 @@ export const S = {
     if (!ok && this.onError) this.onError(err);
   },
 
+  /* Keys whose latest change hasn't reached the shared book yet. Kept in this
+     browser's storage (not memory) so it survives a closed tab or a reload, and
+     retried until it lands. */
+  onDirtyChange: null,
+  getDirty() {
+    return ls.get("__dirty__") || [];
+  },
+  markDirty(key) {
+    const d = this.getDirty();
+    if (!d.includes(key)) {
+      ls.set("__dirty__", [...d, key]);
+      if (this.onDirtyChange) this.onDirtyChange(d.length + 1);
+    }
+  },
+  clearDirty(key) {
+    const d = this.getDirty();
+    if (d.includes(key)) {
+      const next = d.filter((k) => k !== key);
+      ls.set("__dirty__", next);
+      if (this.onDirtyChange) this.onDirtyChange(next.length);
+    }
+  },
+  getLocal(key) {
+    return ls.get(key);
+  },
+  /* Write the local copy and flag it unsynced in one step, before any network call,
+     so nothing is lost if the tab closes mid-save. */
+  setLocalPending(key, value) {
+    ls.set(key, value);
+    this.markDirty(key);
+  },
+  setLocal(key, value) {
+    ls.set(key, value);
+  },
+
+  /* Reads the shared book without touching this browser's local copy — used when
+     merging, where overwriting the local copy would destroy an unsynced change. */
+  async fetchRemote(key) {
+    try {
+      const r = await this.call("get", { key });
+      this.flag(true);
+      return { ok: true, value: r.value == null ? null : JSON.parse(r.value) };
+    } catch (e) {
+      this.flag(false, e.message);
+      return { ok: false, value: null };
+    }
+  },
+
   async get(key) {
     try {
       const r = await this.call("get", { key });
@@ -84,9 +132,12 @@ export const S = {
     try {
       await this.call("set", { key, value: JSON.stringify(value) });
       this.flag(true);
+      // only treat it as synced if nothing newer was saved locally while this write was in flight
+      if (JSON.stringify(ls.get(key)) === JSON.stringify(value)) this.clearDirty(key);
       return true;
     } catch (e) {
       this.flag(false, e.message);
+      this.markDirty(key);
       return false;
     }
   },
