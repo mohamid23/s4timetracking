@@ -43,6 +43,7 @@ import SignIn from "./features/SignIn";
 import Profitability from "./features/Profitability";
 import Admin from "./features/Admin";
 import { sameJson, normalizeCfg, mergeCfg } from "./lib/mergeCfg";
+import { diffCfg, diffHours, diffFinance } from "./lib/audit";
 
 /* ================= app ================= */
 
@@ -67,6 +68,7 @@ function App() {
   // cfgRef: latest config on this screen. baseRef: last version confirmed to match the shared book.
   const cfgRef = useRef(cfg);
   const baseRef = useRef(null);
+  const editFrom = useRef(null); // config as it was before the first not-yet-logged edit, for the activity log
   const entriesRef = useRef({});
   const persistTimer = useRef(null);
   const persisting = useRef(false);
@@ -76,6 +78,13 @@ function App() {
   const inDemo = useRef(false);
   inDemo.current = demo;
   const BASE_KEY = "base:cfg";
+
+  /* Activity log entry with the person's name stored alongside their id, so the history
+     stays readable even if they're renamed or removed later. */
+  const audit = (action, summary, changes = [], extra = {}) => {
+    const who = cfgRef.current.employees?.find((e) => e.id === me);
+    S.log("activity", { actor: me, actorName: who?.name || "", action, summary, changes, ...extra });
+  };
 
   const applyCfg = (next) => {
     cfgRef.current = next;
@@ -260,6 +269,7 @@ function App() {
      client or teammate someone else just added. If the write fails it stays queued and
      is retried automatically. */
   const saveCfg = (next) => {
+    if (!inDemo.current && !editFrom.current) editFrom.current = cfgRef.current;
     applyCfg(next);
     if (inDemo.current) return Promise.resolve();
     S.setLocalPending(CONFIG_KEY, next);
@@ -277,7 +287,11 @@ function App() {
           applyCfg(merged);
           const ok = await S.set(CONFIG_KEY, merged);
           if (ok) markBase(merged);
-          S.log("activity", { actor: me, action: "config_saved" });
+          const changes = diffCfg(editFrom.current || prev, mine);
+          editFrom.current = null;
+          if (changes.length) {
+            audit("settings_changed", changes.length === 1 ? changes[0] : `${changes.length} changes to settings`, changes, { synced: ok });
+          }
           flash(ok ? "Saved" : "Not synced yet — saved on this device, retrying automatically");
         } finally {
           persisting.current = false;
@@ -292,8 +306,14 @@ function App() {
      cell. Everyone only edits their own rows, so each write keeps what the shared book
      holds for other people and replaces only this person's lines. */
   const saveMonth = (ym, rows) => {
+    const before = (entriesRef.current[ym] || []).filter((e) => e.emp === me);
     applyEntries({ ...entriesRef.current, [ym]: rows });
     if (inDemo.current) return Promise.resolve();
+    const changes = diffHours(before, rows.filter((e) => e.emp === me), {
+      clientName: (id) => cfgRef.current.clients.find((c) => c.id === id)?.name || id,
+      projectName: (id) => cfgRef.current.projects?.find((x) => x.id === id)?.name || id,
+    });
+    if (changes.length) audit("hours_changed", changes.length === 1 ? changes[0] : `${changes.length} time entries changed`, changes, { month: ym });
     S.setLocalPending(entriesKey(ym), rows);
     const prevChain = writeChains.current[ym] || Promise.resolve();
     const run = prevChain.then(async () => {
@@ -323,22 +343,26 @@ function App() {
       flash("Sample data only, nothing is saved");
       return;
     }
+    const prevRows = finance[ym] || [];
     S.setLocalPending(financeKey(ym), rows);
     writeInflight.current += 1;
     const ok = await S.set(financeKey(ym), rows);
     writeInflight.current -= 1;
-    S.log("activity", { actor: me, action: "finance_imported", month: ym, rows: rows.length });
+    const d = diffFinance(prevRows, rows, ym);
+    audit("revenue_imported", d.summary, d.changes, { month: ym, synced: ok });
     flash(ok ? "Saved" : "Not synced yet — saved on this device, retrying automatically");
   };
 
   const pickMe = async (empId) => {
     setMe(empId);
     await S.setPersonal(ME_KEY, { emp: empId });
-    S.log("activity", { actor: empId, action: "signed_in" });
+    const who = cfgRef.current.employees?.find((e) => e.id === empId);
+    S.log("activity", { actor: empId, actorName: who?.name || "", action: "signed_in", summary: `${who?.name || "Someone"} signed in` });
   };
 
   const signOut = async () => {
     const wasDemo = demo;
+    if (!wasDemo && me) audit("signed_out", `${cfgRef.current.employees?.find((e) => e.id === me)?.name || "Someone"} signed out`);
     setMe("");
     setDemo(false);
     await S.setPersonal(ME_KEY, { emp: "" });

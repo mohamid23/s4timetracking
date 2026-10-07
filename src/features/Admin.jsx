@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { BRAND, ROLES, ROLE_LABEL } from "../lib/constants";
-import { uid, clean } from "../lib/helpers";
+import { uid, clean, downloadCSV } from "../lib/helpers";
 import { S } from "../lib/storage";
 import { Btn, Card, Field, Label, Select, Td, Th } from "../components/ui";
 
@@ -13,10 +13,28 @@ const ROLE_OPTIONS = [
 
 function fmtTime(ts) {
   if (!ts) return "";
-  return new Date(Number(ts)).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return new Date(Number(ts)).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-function LogTable({ rows, empty }) {
+const ACTION_LABEL = {
+  settings_changed: "Settings",
+  hours_changed: "Hours",
+  revenue_imported: "Revenue import",
+  signed_in: "Sign in",
+  signed_out: "Sign out",
+  login_failed: "Failed sign-in",
+  password_created: "Password set",
+  password_set_via_link: "Password set",
+  setup_link_created: "Setup link",
+  config_saved: "Settings (older entry)",
+  finance_imported: "Revenue import (older entry)",
+  invite_sent: "Invite (older entry)",
+};
+const actionLabel = (a) => ACTION_LABEL[a] || a || "Event";
+
+const whoOf = (r, people) => r.actorName || people[r.actor] || r.actor || "—";
+
+function LogTable({ rows, empty, people, kind }) {
   if (!rows.length) {
     return (
       <p className="text-sm" style={{ color: BRAND.slate }}>
@@ -29,25 +47,43 @@ function LogTable({ rows, empty }) {
       <table className="w-full border-collapse">
         <thead>
           <tr>
-            <Th w="160px">When</Th>
-            <Th w="160px">Who</Th>
-            <Th>What</Th>
+            <Th w="170px">When</Th>
+            <Th w="150px">Who</Th>
+            <Th w="130px">Type</Th>
+            <Th>What changed</Th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r, i) => (
-            <tr key={i}>
+            <tr key={i} style={{ verticalAlign: "top" }}>
               <Td mono>{fmtTime(r.ts)}</Td>
-              <Td>{r.actor || "—"}</Td>
+              <Td>{whoOf(r, people)}</Td>
               <Td>
-                <span>{r.action || r.kind}</span>
-                {r.details && Object.keys(r.details).length > 0 && (
-                  <span className="text-xs block mt-0.5" style={{ color: BRAND.slate }}>
-                    {Object.entries(r.details)
-                      .filter(([k]) => !["ts", "kind", "actor", "action"].includes(k))
-                      .map(([k, v]) => `${k}: ${v}`)
-                      .join(", ")}
-                  </span>
+                <span style={{ color: r.action === "login_failed" || kind === "error" ? BRAND.red : BRAND.slate }}>
+                  {kind === "error" ? "Error" : actionLabel(r.action)}
+                </span>
+              </Td>
+              <Td>
+                <div className="font-medium">
+                  {r.summary || r.message || actionLabel(r.action)}
+                  {r.synced === false && (
+                    <span className="text-xs ml-2" style={{ color: BRAND.amber }}>
+                      not yet in shared storage when logged
+                    </span>
+                  )}
+                </div>
+                {Array.isArray(r.changes) && r.changes.length > 1 && (
+                  <ul className="text-xs mt-1 list-disc pl-4" style={{ color: BRAND.slate }}>
+                    {r.changes.map((c, j) => (
+                      <li key={j}>{c}</li>
+                    ))}
+                  </ul>
+                )}
+                {kind === "error" && r.source && (
+                  <div className="text-xs mt-0.5 font-mono" style={{ color: BRAND.slate }}>
+                    {r.source}
+                    {r.line ? `:${r.line}` : ""}
+                  </div>
                 )}
               </Td>
             </tr>
@@ -66,6 +102,10 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
   const [errors, setErrors] = useState([]);
   const [rowStatus, setRowStatus] = useState({});
   const [sendingId, setSendingId] = useState(null);
+  const [fWho, setFWho] = useState("");
+  const [fType, setFType] = useState("");
+  const [fText, setFText] = useState("");
+  const people = Object.fromEntries(cfg.employees.map((e) => [e.id, e.name]));
 
   const refreshLogs = async () => {
     setActivity(await S.listLogs("activity", 200));
@@ -80,6 +120,12 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
     const r = await S.createSetupLink(email);
     if (!r.ok) return { ok: false, error: r.error };
     const link = `${window.location.origin}/?setpw=${r.token}`;
+    S.log("activity", {
+      actor: meRecord?.id || "",
+      actorName: meRecord?.name || "",
+      action: "setup_link_created",
+      summary: `Created a setup link for ${email}`,
+    });
     try {
       await navigator.clipboard.writeText(link);
       return { ok: true, copied: true, link };
@@ -134,6 +180,18 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
     setSendingId(null);
     refreshLogs();
   };
+
+  const whoOptions = [...new Set(activity.map((r) => whoOf(r, people)))].filter((x) => x && x !== "—").sort().map((n) => ({ value: n, label: n }));
+  const typeOptions = [...new Set(activity.map((r) => r.action).filter(Boolean))];
+  const filteredActivity = activity.filter((r) => {
+    if (fWho && whoOf(r, people) !== fWho) return false;
+    if (fType && r.action !== fType) return false;
+    if (fText) {
+      const hay = `${r.summary || ""} ${(r.changes || []).join(" ")} ${whoOf(r, people)}`.toLowerCase();
+      if (!hay.includes(fText.toLowerCase())) return false;
+    }
+    return true;
+  });
 
   return (
     <>
@@ -210,18 +268,56 @@ export default function Admin({ cfg, saveCfg, sync, meRecord }) {
 
       <Card
         title="Activity log"
-        note="Sign-ins, config changes, and revenue imports. Kept locally on this device, and in shared storage once connected."
+        note="Every sign-in, setting change, hours entry and revenue import, with what it was before and after. Kept on this device and in shared storage."
         right={
-          <Btn onClick={refreshLogs} disabled={busy}>
-            Refresh
-          </Btn>
+          <>
+            <Btn
+              onClick={() =>
+                downloadCSV(
+                  "s4_activity_log.csv",
+                  filteredActivity.map((r) => ({
+                    when: fmtTime(r.ts),
+                    who: whoOf(r, people),
+                    type: actionLabel(r.action),
+                    summary: r.summary || "",
+                    details: Array.isArray(r.changes) ? r.changes.join(" | ") : "",
+                  }))
+                )
+              }
+              disabled={!filteredActivity.length}
+            >
+              Download CSV
+            </Btn>
+            <Btn onClick={refreshLogs} disabled={busy}>
+              Refresh
+            </Btn>
+          </>
         }
       >
-        <LogTable rows={activity} empty="Nothing logged yet." />
+        <div className="flex flex-wrap gap-3 mb-4">
+          <div style={{ width: 190 }}>
+            <Label>Person</Label>
+            <Select value={fWho} onChange={setFWho} placeholder="Everyone" options={whoOptions} />
+          </div>
+          <div style={{ width: 190 }}>
+            <Label>Type</Label>
+            <Select
+              value={fType}
+              onChange={setFType}
+              placeholder="All types"
+              options={typeOptions.map((a) => ({ value: a, label: actionLabel(a) }))}
+            />
+          </div>
+          <div style={{ width: 260 }}>
+            <Label>Search</Label>
+            <Field value={fText} onChange={setFText} placeholder="Client, person, amount…" />
+          </div>
+        </div>
+        <LogTable rows={filteredActivity} empty={activity.length ? "Nothing matches those filters." : "Nothing logged yet."} people={people} kind="activity" />
       </Card>
 
       <Card title="Error log" note="Problems the app ran into, client and server side, for troubleshooting.">
-        <LogTable rows={errors} empty="No errors logged. That's good." />
+        <LogTable rows={errors} empty="No errors logged. That's good." people={people} kind="error" />
       </Card>
     </>
   );

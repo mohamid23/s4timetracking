@@ -73,6 +73,7 @@ function SetPasswordScreen({ token, cfg, onSignIn }) {
       return;
     }
     const hit = findByEmail(cfg.employees, r.email);
+    S.log("activity", { actor: hit?.id || "", actorName: hit?.name || "", action: "password_set_via_link", summary: `${hit?.name || r.email} set a password using a setup link` });
     window.history.replaceState({}, "", window.location.pathname);
     if (hit) onSignIn(hit.id);
     else setState("done");
@@ -194,6 +195,7 @@ export default function SignIn({ cfg, onSignIn, onDemo }) {
       setError(r.error || "Couldn't set that password.");
       return;
     }
+    S.log("activity", { actor: matched.id, actorName: matched.name, action: "password_created", summary: `${matched.name} set a password for ${email.trim()}` });
     onSignIn(matched.id);
   };
 
@@ -203,6 +205,7 @@ export default function SignIn({ cfg, onSignIn, onDemo }) {
     const r = await S.login(email.trim(), password);
     setBusy(false);
     if (!r.ok) {
+      S.log("activity", { actor: matched.id, actorName: matched.name, action: "login_failed", summary: `Failed sign-in attempt for ${email.trim()}` });
       setError(r.error || "Wrong email or password.");
       return;
     }
