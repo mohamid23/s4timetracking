@@ -42,6 +42,7 @@ import { RankedBarChart } from "./components/charts";
 import SignIn from "./features/SignIn";
 import Profitability from "./features/Profitability";
 import Admin from "./features/Admin";
+import { sameJson, normalizeCfg, mergeCfg } from "./lib/mergeCfg";
 
 /* ================= app ================= */
 
@@ -62,29 +63,29 @@ function App() {
     setTimeout(() => setStatus(""), 2500);
   };
 
+  // cfgRef: latest config on this screen. baseRef: the last version known to match the shared book.
+  const cfgRef = useRef(cfg);
+  const baseRef = useRef(null);
+  const persistTimer = useRef(null);
+  const persisting = useRef(false);
+  const inDemo = useRef(false);
+  inDemo.current = demo;
+
+  const applyCfg = (next, { base = true } = {}) => {
+    cfgRef.current = next;
+    if (base) baseRef.current = next;
+    setCfg(next);
+  };
+
   const loadAll = async () => {
     setBusy(true);
     try {
       const c = await S.get(CONFIG_KEY);
       if (c) {
-        setCfg({
-          employees: c.employees?.length ? c.employees : DEFAULT_EMPLOYEES,
-          clients: c.clients?.length ? c.clients : DEFAULT_CLIENTS,
-          services: c.services?.length ? c.services : DEFAULT_SERVICES,
-          projects: c.projects || [],
-          capabilityMap: c.capabilityMap || DEFAULT_CAPABILITY_MAP,
-          industries: c.industries?.length ? c.industries : DEFAULT_INDUSTRIES,
-        });
+        applyCfg(normalizeCfg(c));
       } else {
-        const seeded = {
-          employees: DEFAULT_EMPLOYEES,
-          clients: DEFAULT_CLIENTS,
-          services: DEFAULT_SERVICES,
-          projects: [],
-          capabilityMap: DEFAULT_CAPABILITY_MAP,
-          industries: DEFAULT_INDUSTRIES,
-        };
-        setCfg(seeded);
+        const seeded = normalizeCfg({});
+        applyCfg(seeded);
         await S.set(CONFIG_KEY, seeded);
       }
       const keys = await S.list(PREFIX);
@@ -109,6 +110,27 @@ function App() {
     }
   };
 
+  /* Quietly pull in what other people have changed. Skipped in demo mode, and while
+     this person has an unsaved config change in flight so it can't undo their typing. */
+  const refreshShared = async () => {
+    if (inDemo.current || persistTimer.current || persisting.current) return;
+    const c = await S.get(CONFIG_KEY);
+    if (persistTimer.current || persisting.current) return;
+    if (c) {
+      const remote = normalizeCfg(c);
+      if (!sameJson(remote, cfgRef.current)) applyCfg(remote);
+    }
+    const keys = await S.list(PREFIX);
+    const ent = {};
+    const fin = {};
+    for (const k of keys) {
+      if (k.startsWith(PREFIX + "entries:")) ent[k.split(":").pop()] = (await S.get(k)) || [];
+      else if (k.startsWith(PREFIX + "finance:")) fin[k.split(":").pop()] = (await S.get(k)) || [];
+    }
+    setEntries((prev) => (sameJson(prev, ent) ? prev : ent));
+    setFinance((prev) => (sameJson(prev, fin) ? prev : fin));
+  };
+
   useEffect(() => {
     S.onStatus = (ok, err) => setSync((p) => ({ ...p, online: ok, error: ok ? "" : err || "" }));
     loadAll();
@@ -117,9 +139,15 @@ function App() {
     const onRejection = (e) => S.log("error", { message: String(e.reason?.message || e.reason) });
     window.addEventListener("error", onError);
     window.addEventListener("unhandledrejection", onRejection);
+
+    const onVisible = () => document.visibilityState === "visible" && refreshShared();
+    document.addEventListener("visibilitychange", onVisible);
+    const interval = setInterval(() => document.visibilityState === "visible" && refreshShared(), 45000);
     return () => {
       window.removeEventListener("error", onError);
       window.removeEventListener("unhandledrejection", onRejection);
+      document.removeEventListener("visibilitychange", onVisible);
+      clearInterval(interval);
     };
   }, []);
 
@@ -132,11 +160,36 @@ function App() {
     flash("This browser's data was pushed to shared storage");
   };
 
-  const saveCfg = async (next) => {
-    setCfg(next);
-    const ok = await S.set(CONFIG_KEY, next);
-    S.log("activity", { actor: me, action: "config_saved" });
-    flash(ok ? "Saved" : "Saved on this device only, the shared book is unreachable");
+  /* Shows the change immediately, then (after a short pause so typing isn't one
+     network call per keystroke) merges it with whatever is in the shared book now
+     before writing — so a screen that's a few minutes stale can't wipe out a
+     client or teammate someone else just added. */
+  const saveCfg = (next) => {
+    applyCfg(next, { base: false });
+    if (inDemo.current) return Promise.resolve();
+    clearTimeout(persistTimer.current);
+    return new Promise((resolve) => {
+      persistTimer.current = setTimeout(async () => {
+        persistTimer.current = null;
+        persisting.current = true;
+        const mine = cfgRef.current;
+        const prev = baseRef.current || mine;
+        const raw = await S.get(CONFIG_KEY);
+        const merged = raw ? mergeCfg(prev, mine, normalizeCfg(raw)) : mine;
+        if (persistTimer.current || cfgRef.current !== mine) {
+          // they kept typing while we were reading; the newer save will carry it all
+          persisting.current = false;
+          resolve();
+          return;
+        }
+        applyCfg(merged);
+        const ok = await S.set(CONFIG_KEY, merged);
+        S.log("activity", { actor: me, action: "config_saved" });
+        flash(ok ? "Saved" : "Saved on this device only, the shared book is unreachable");
+        persisting.current = false;
+        resolve();
+      }, 500);
+    });
   };
 
   /* Everyone only ever edits their own rows, so a save keeps whatever the shared book
