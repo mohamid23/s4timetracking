@@ -44,6 +44,7 @@ import Profitability from "./features/Profitability";
 import Admin from "./features/Admin";
 import { sameJson, normalizeCfg, mergeCfg } from "./lib/mergeCfg";
 import { diffCfg, diffHours, diffFinance } from "./lib/audit";
+import { buildWeekLines, lineKey } from "./lib/weekLines";
 
 /* ================= app ================= */
 
@@ -592,18 +593,25 @@ function EnterTime({ cfg, me, entries, saveMonth, clientById }) {
     return all.filter((e) => e.emp === me && days.includes(e.date));
   }, [entries, weekMonths, me, days]);
 
+  // Rows this person has hidden on purpose. Kept on this device; hours already entered always show.
+  const [hidden, setHidden] = useState([]);
+  useEffect(() => {
+    S.getPersonal(`hiddenLines:${me}`).then((v) => setHidden(Array.isArray(v) ? v : []));
+  }, [me]);
+  const saveHidden = (next) => {
+    setHidden(next);
+    S.setPersonal(`hiddenLines:${me}`, next);
+  };
+
   const lines = useMemo(() => {
-    const map = new Map();
-    weekEntries.forEach((e) => {
-      const k = `${e.client}||${e.project || ""}||${e.svc}`;
-      if (!map.has(k)) map.set(k, { client: e.client, project: e.project || "", svc: e.svc });
-    });
-    extraLines.forEach((l) => {
-      const k = `${l.client}||${l.project || ""}||${l.svc}`;
-      if (!map.has(k)) map.set(k, l);
-    });
-    return [...map.entries()].map(([k, v]) => ({ key: k, ...v }));
-  }, [weekEntries, extraLines]);
+    const clientLabel = (id) => clientById[id]?.name || id;
+    return buildWeekLines({ entries, me, weekStart, days, extra: extraLines, hidden }).sort(
+      (a, b) =>
+        clientLabel(a.client).localeCompare(clientLabel(b.client)) ||
+        projectName(a.project).localeCompare(projectName(b.project)) ||
+        a.svc.localeCompare(b.svc)
+    );
+  }, [entries, me, weekStart, days, extraLines, hidden, clientById, cfg.projects]);
 
   const hoursAt = (client, project, svc, date) => {
     const hit = weekEntries.find((e) => e.client === client && (e.project || "") === project && e.svc === svc && e.date === date);
@@ -630,7 +638,9 @@ function EnterTime({ cfg, me, entries, saveMonth, clientById }) {
 
   const addLine = () => {
     if (!newClient || !newService) return;
-    setExtraLines((prev) => [...prev, { client: newClient, project: newProject, svc: newService }]);
+    const added = { client: newClient, project: newProject, svc: newService };
+    if (hidden.includes(lineKey(added))) saveHidden(hidden.filter((k) => k !== lineKey(added)));
+    setExtraLines((prev) => [...prev, added]);
     setNewClient("");
     setNewProject("");
     setNewService("");
@@ -653,7 +663,7 @@ function EnterTime({ cfg, me, entries, saveMonth, clientById }) {
           day: "numeric",
           year: "numeric",
         })}`}
-        note="Type hours into the grid. Each cell saves when you click away. Leave a cell blank or enter 0 to remove it."
+        note="Type hours into the grid. Each cell saves when you click away. Leave a cell blank or enter 0 to remove it. Rows you have used in the past few months stay here each week, just add the hours. Use × to drop one you no longer need."
         right={
           <>
             <Btn onClick={() => setWeekStart(addDays(weekStart, -7))}>Previous week</Btn>
@@ -678,12 +688,13 @@ function EnterTime({ cfg, me, entries, saveMonth, clientById }) {
                   </Th>
                 ))}
                 <Th align="right">Total</Th>
+                <Th w="28px"></Th>
               </tr>
             </thead>
             <tbody>
               {lines.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="px-3 py-6 text-sm" style={{ color: BRAND.slate }}>
+                  <td colSpan={12} className="px-3 py-6 text-sm" style={{ color: BRAND.slate }}>
                     No lines yet this week. Add a client and service type below and the grid opens up.
                   </td>
                 </tr>
@@ -705,6 +716,21 @@ function EnterTime({ cfg, me, entries, saveMonth, clientById }) {
                   <Td align="right" mono strong>
                     {rowTotal(l.client, l.project, l.svc) ? hrs(rowTotal(l.client, l.project, l.svc)) : ""}
                   </Td>
+                  <td className="px-1 border-b text-center" style={{ borderColor: BRAND.line, width: 28 }}>
+                    {!rowTotal(l.client, l.project, l.svc) && (
+                      <button
+                        title="Remove this row from my timesheet"
+                        aria-label="Remove row"
+                        onClick={() => {
+                          setExtraLines((prev) => prev.filter((x) => lineKey(x) !== l.key));
+                          if (!hidden.includes(l.key)) saveHidden([...hidden, l.key]);
+                        }}
+                        style={{ color: BRAND.slate }}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
               <tr style={{ background: BRAND.wash }}>
@@ -719,6 +745,7 @@ function EnterTime({ cfg, me, entries, saveMonth, clientById }) {
                 <Td align="right" mono strong>
                   {hrs(weekTotal)}
                 </Td>
+                <Td></Td>
               </tr>
             </tbody>
           </table>
