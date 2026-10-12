@@ -61,6 +61,7 @@ export function diffCfg(prev, next) {
       else if (k === "email") lines.push(`${who}: email ${show(before.email)} → ${show(after.email)}`);
       else if (k === "role") lines.push(`${who}: title ${show(before.role)} → ${show(after.role)}`);
       else if (k === "rate") lines.push(`${who}: hourly cost ${fmtRate(before.rate)} → ${fmtRate(after.rate)}`);
+      else if (k === "hoursReport") lines.push(`${who}: payroll hours access ${after.hoursReport ? "turned on" : "turned off"}`);
       else if (k === "accessLevel")
         lines.push(`${who}: access ${ROLE_LABEL[before.accessLevel] || show(before.accessLevel)} → ${ROLE_LABEL[after.accessLevel] || show(after.accessLevel)}`);
       else if (k === "managedClients") {

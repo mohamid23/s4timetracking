@@ -35,13 +35,14 @@ import {
   downloadCSV,
 } from "./lib/helpers";
 import { S } from "./lib/storage";
-import { canSeeTab, landingTab, isAdminLevel } from "./lib/roles";
+import { canSeeTab, canSeeCost, landingTab, isAdminLevel } from "./lib/roles";
 import { buildDemoBook } from "./lib/demoData";
 import { S4Mark, Label, Card, Btn, Field, Select, Th, Td, Bar, Stat, CsvInput, Pill } from "./components/ui";
 import { RankedBarChart } from "./components/charts";
 import SignIn from "./features/SignIn";
 import Profitability from "./features/Profitability";
 import Admin from "./features/Admin";
+import Reports from "./features/Reports";
 import { sameJson, normalizeCfg, mergeCfg } from "./lib/mergeCfg";
 import { diffCfg, diffHours, diffFinance } from "./lib/audit";
 import { buildWeekLines, lineKey } from "./lib/weekLines";
@@ -516,7 +517,7 @@ function App() {
             </p>
           </div>
         )}
-        {noRate > 0 && (tab === "reports" || tab === "profit") && (
+        {noRate > 0 && canSeeCost(meRecord) && (tab === "reports" || tab === "profit") && (
           <div className="mb-6 border-l-4 p-4" style={{ borderColor: BRAND.amber, background: "#FFF8EC" }}>
             <div className="text-sm font-semibold">
               {num(noRate)} of {num(cfg.employees.length)} people have no hourly cost set
@@ -532,7 +533,7 @@ function App() {
           <EnterTime cfg={cfg} me={me} entries={entries} saveMonth={saveMonth} clientById={clientById} />
         )}
         {tab === "reports" && (
-          <Reports cfg={cfg} allEntries={allEntries} months={months} empName={empName} clientName={clientName} rateOf={rateOf} />
+          <Reports cfg={cfg} allEntries={allEntries} empName={empName} clientName={clientName} rateOf={rateOf} showCost={canSeeCost(meRecord)} />
         )}
         {tab === "profit" && (
           <Profitability
@@ -860,197 +861,6 @@ function RecentEntries({ me, entries, clientById }) {
   );
 }
 
-/* ================= reports ================= */
-
-function Reports({ cfg, allEntries, months, empName, clientName, rateOf }) {
-  const thisMonth = todayISO().slice(0, 7);
-  const [from, setFrom] = useState(months[0] || thisMonth);
-  const [to, setTo] = useState(thisMonth);
-  const [group, setGroup] = useState("person");
-  const [split, setSplit] = useState("none");
-  const [scope, setScope] = useState("all");
-
-  const opts = months.map((m) => ({ value: m, label: monthLabel(m) }));
-
-  const dimValue = (e, dim) =>
-    dim === "person" ? empName(e.emp) : dim === "client" ? clientName(e.client) : dim === "service" ? e.svc : monthLabel(ymOf(e.date));
-
-  const filtered = useMemo(
-    () =>
-      allEntries.filter((e) => {
-        const ym = ymOf(e.date);
-        if (ym < from || ym > to) return false;
-        if (scope === "billable" && !isBillable(e.svc)) return false;
-        if (scope === "internal" && isBillable(e.svc)) return false;
-        return true;
-      }),
-    [allEntries, from, to, scope]
-  );
-
-  const { rows, cols, totalHours, totalCost } = useMemo(() => {
-    const map = new Map();
-    const colSet = new Set();
-    let th = 0;
-    let tc = 0;
-    filtered.forEach((e) => {
-      const key = dimValue(e, group);
-      const col = split === "none" ? "Total" : dimValue(e, split);
-      colSet.add(col);
-      if (!map.has(key)) map.set(key, { key, hours: 0, cost: 0, cells: {} });
-      const r = map.get(key);
-      const h = Number(e.hours) || 0;
-      const c = h * rateOf(e.emp);
-      r.hours += h;
-      r.cost += c;
-      r.cells[col] = (r.cells[col] || 0) + h;
-      th += h;
-      tc += c;
-    });
-    return {
-      rows: [...map.values()].sort((a, b) => b.hours - a.hours),
-      cols: [...colSet].sort(),
-      totalHours: th,
-      totalCost: tc,
-    };
-  }, [filtered, group, split, rateOf]);
-
-  const exportRows = () =>
-    rows.map((r) => {
-      const base = { [group]: r.key, hours: r.hours, labor_cost: Math.round(r.cost) };
-      if (split !== "none") cols.forEach((c) => (base[c] = r.cells[c] || 0));
-      return base;
-    });
-
-  return (
-    <>
-      <Card
-        title="Hours and labor cost"
-        note="Labor cost is hours multiplied by the hourly cost on the employee record."
-        right={
-          <Btn kind="solid" onClick={() => downloadCSV(`s4_hours_${from}_to_${to}.csv`, exportRows())} disabled={!rows.length}>
-            Download CSV
-          </Btn>
-        }
-      >
-        <div className="flex flex-wrap gap-4 mb-4">
-          <div style={{ width: 160 }}>
-            <Label>From month</Label>
-            <Select value={from} onChange={setFrom} options={opts} />
-          </div>
-          <div style={{ width: 160 }}>
-            <Label>To month</Label>
-            <Select value={to} onChange={setTo} options={opts} />
-          </div>
-          <div style={{ width: 170 }}>
-            <Label>Group by</Label>
-            <Select
-              value={group}
-              onChange={setGroup}
-              options={[
-                { value: "person", label: "Person" },
-                { value: "client", label: "Client" },
-                { value: "service", label: "Service type" },
-                { value: "month", label: "Month" },
-              ]}
-            />
-          </div>
-          <div style={{ width: 170 }}>
-            <Label>Break out by</Label>
-            <Select
-              value={split}
-              onChange={setSplit}
-              options={[
-                { value: "none", label: "No breakout" },
-                { value: "person", label: "Person" },
-                { value: "client", label: "Client" },
-                { value: "service", label: "Service type" },
-                { value: "month", label: "Month" },
-              ]}
-            />
-          </div>
-          <div style={{ width: 170 }}>
-            <Label>Include</Label>
-            <Select
-              value={scope}
-              onChange={setScope}
-              options={[
-                { value: "all", label: "All time" },
-                { value: "billable", label: "Client work only" },
-                { value: "internal", label: "Internal only" },
-              ]}
-            />
-          </div>
-        </div>
-
-        <div className="flex gap-8 mb-4 pb-4 border-b" style={{ borderColor: BRAND.line }}>
-          <Stat label="Hours" value={hrs(totalHours)} />
-          <Stat label="Labor cost" value={money(totalCost)} />
-          <Stat
-            label="Client work share"
-            value={
-              totalHours
-                ? `${num((filtered.filter((e) => isBillable(e.svc)).reduce((s, e) => s + e.hours, 0) / totalHours) * 100, 0)}%`
-                : "0%"
-            }
-          />
-        </div>
-
-        {rows.length > 0 && split === "none" && (
-          <div className="mb-6 pb-6 border-b" style={{ borderColor: BRAND.line }}>
-            <div className="text-xs font-semibold mb-3" style={{ color: BRAND.navy }}>
-              Hours by {group === "person" ? "person" : group === "client" ? "client" : group === "service" ? "service type" : "month"}
-            </div>
-            <RankedBarChart data={rows.slice(0, 12)} labelKey="key" valueKey="hours" valueFmt={hrs} />
-          </div>
-        )}
-
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr>
-                <Th>{group === "person" ? "Person" : group === "client" ? "Client" : group === "service" ? "Service type" : "Month"}</Th>
-                {split !== "none" && cols.map((c) => <Th key={c} align="right">{c}</Th>)}
-                <Th align="right">Hours</Th>
-                <Th align="right">Labor cost</Th>
-                <Th w="18%">Share</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.key}>
-                  <Td>{r.key}</Td>
-                  {split !== "none" &&
-                    cols.map((c) => (
-                      <Td key={c} align="right" mono>
-                        {r.cells[c] ? hrs(r.cells[c]) : ""}
-                      </Td>
-                    ))}
-                  <Td align="right" mono strong>
-                    {hrs(r.hours)}
-                  </Td>
-                  <Td align="right" mono>
-                    {money(r.cost)}
-                  </Td>
-                  <Td>
-                    <Bar pct={totalHours ? (r.hours / totalHours) * 100 : 0} color={BRAND.teal} />
-                  </Td>
-                </tr>
-              ))}
-              {!rows.length && (
-                <tr>
-                  <td colSpan={6} className="px-3 py-6 text-sm" style={{ color: BRAND.slate }}>
-                    No hours in this range.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-    </>
-  );
-}
-
 /* ================= setup ================= */
 
 function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, pending, refresh, busy }) {
@@ -1129,7 +939,7 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, pending, refr
 
       <Card
         title="People, roles, and hourly cost"
-        note="Hourly cost drives every labor number in the reports; use fully loaded cost, not billing rate. Role decides what each person can see when they sign in: Contributors see only their own timesheet, Account Managers see only their assigned clients, Admins and Super Admin see everything."
+        note="Hourly cost drives every labor number in the reports; use fully loaded cost, not billing rate. Role decides what each person can see when they sign in: Contributors see only their own timesheet, Account Managers see only their assigned clients, Admins and Super Admin see everything. Tick Payroll on a Contributor to let them see everyone's hours by day (never costs or profitability)."
       >
         <div className="grid gap-4" style={{ gridTemplateColumns: "minmax(0,1fr) minmax(0,320px)" }}>
           <div className="overflow-x-auto">
@@ -1140,6 +950,7 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, pending, refr
                   <Th>Email</Th>
                   <Th>Title</Th>
                   <Th w="150px">Access</Th>
+                  <Th align="center" w="120px">Hours reports</Th>
                   <Th align="right" w="110px">Hourly cost</Th>
                   <Th w="90px"></Th>
                 </tr>
@@ -1181,6 +992,31 @@ function Setup({ cfg, saveCfg, entries, finance, allEntries, sync, pending, refr
                         }
                         options={ROLE_OPTIONS}
                       />
+                    </Td>
+                    <Td align="center">
+                      {(e.accessLevel || ROLES.CONTRIBUTOR) !== ROLES.CONTRIBUTOR ? (
+                        <span className="text-xs" style={{ color: BRAND.slate }}>
+                          included
+                        </span>
+                      ) : (
+                        <label
+                          className="text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                          title="Lets this person see everyone's hours by day for payroll. No costs, no profitability."
+                          style={{ color: BRAND.slate }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={!!e.hoursReport}
+                            onChange={(ev) =>
+                              saveCfg({
+                                ...cfg,
+                                employees: cfg.employees.map((x) => (x.id === e.id ? { ...x, hoursReport: ev.target.checked } : x)),
+                              })
+                            }
+                          />
+                          Payroll
+                        </label>
+                      )}
                     </Td>
                     <Td align="right">
                       <Field

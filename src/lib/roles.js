@@ -14,6 +14,11 @@ export function visibleClientIds(user, cfg) {
   return [];
 }
 
+/* Labor cost and anything derived from hourly cost. Hours-only reporting access never includes it. */
+export function canSeeCost(user) {
+  return !!user && (user.accessLevel || ROLES.CONTRIBUTOR) !== ROLES.CONTRIBUTOR;
+}
+
 export function canSeeTab(user, tabKey) {
   if (!user) return tabKey === "entry";
   const level = user.accessLevel || ROLES.CONTRIBUTOR;
@@ -21,7 +26,8 @@ export function canSeeTab(user, tabKey) {
     case "entry":
       return true;
     case "reports":
-      return level !== ROLES.CONTRIBUTOR;
+      // Contributors normally don't see reports; an admin can switch on hours-only access (payroll).
+      return level !== ROLES.CONTRIBUTOR || !!user.hoursReport;
     case "profit":
       return level !== ROLES.CONTRIBUTOR;
     case "setup":
